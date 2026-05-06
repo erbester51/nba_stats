@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NBA Stats Dashboard</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>NBA Live Dashboard</h1>
+      <p>Current games, starters, team and player stats in one place.</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="cards-row">
+      <button class="tab-button active" data-tab="games">Today</button>
+      <button class="tab-button" data-tab="team">Team</button>
+      <button class="tab-button" data-tab="player">Player</button>
+      <button class="tab-button" data-tab="season">Season</button>
+    </section>
+
+    <section id="games" class="tab-panel active">
+      <div class="section-header">
+        <h2>Today's Games</h2>
+        <p>Current games and starters for each team.</p>
+      </div>
+      <div id="games-loading" class="loader">Loading games...</div>
+      <div id="games-list" class="grid"></div>
+    </section>
+
+    <section id="team" class="tab-panel">
+      <div class="section-header">
+        <h2>Team Dashboard</h2>
+        <p>Select a team to view basic team stats.</p>
+      </div>
+      <div class="form-row">
+        <label for="team-select">Team</label>
+        <select id="team-select"><option value="">Loading teams...</option></select>
+      </div>
+      <div id="team-info" class="card"></div>
+    </section>
+
+    <section id="player" class="tab-panel">
+      <div class="section-header">
+        <h2>Player Stats</h2>
+        <p>Select a player from the list or search by name or NBA player ID.</p>
+      </div>
+      <div class="form-row">
+        <label for="player-select">Player</label>
+        <select id="player-select"><option value="">Loading players...</option></select>
+      </div>
+      <div class="form-row">
+        <input id="player-input" type="text" placeholder="Stephen Curry or 201939" />
+        <button id="player-search">Search</button>
+      </div>
+      <div id="player-info" class="card"></div>
+      <div id="player-season-select" class="form-row hidden">
+        <label for="player-season">Season</label>
+        <select id="player-season"></select>
+      </div>
+      <div id="player-season-stats" class="card"></div>
+      <div id="player-game-log" class="card"></div>
+    </section>
+
+    <section id="season" class="tab-panel">
+      <div class="section-header">
+        <h2>Season Overview</h2>
+        <p>Select a season to review the league context and today's games.</p>
+      </div>
+      <div class="form-row">
+        <label for="season-select">Season</label>
+        <select id="season-select"></select>
+      </div>
+      <div id="season-summary" class="card">
+        <p>Season selection is currently used to track the last 4 NBA seasons.</p>
+      </div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
