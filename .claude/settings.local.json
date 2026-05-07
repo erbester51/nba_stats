@@ -16,7 +16,11 @@
       "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:3000/api/teams/30/leaders\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; Write-Output \"playoffLeaders is null: $\\($null -eq $r.playoffLeaders\\)\"; $r.regularLeaders.points)",
       "PowerShell($r = Invoke-WebRequest -Uri \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news?limit=20\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; $r.articles | Select-Object -First 3 | Format-List headline, description, published, @{N='url';E={$_.links.web.href}}, byline)",
       "PowerShell($r = Invoke-WebRequest -Uri \"https://www.cbssports.com/rss/headlines/nba/\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0'} | Select-Object -ExpandProperty Content; $r.Substring\\(0, 800\\))",
-      "PowerShell($r = Invoke-WebRequest -Uri \"https://www.cbssports.com/rss/headlines/nba/\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0'} | Select-Object -ExpandProperty Content; [xml]$xml = $r; $xml.rss.channel.item | Select-Object -First 3 | Format-List title, link, pubDate)"
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://www.cbssports.com/rss/headlines/nba/\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0'} | Select-Object -ExpandProperty Content; [xml]$xml = $r; $xml.rss.channel.item | Select-Object -First 3 | Format-List title, link, pubDate)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/2\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; $r.team | Get-Member -MemberType NoteProperty | Select-Object Name)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/2\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; \\($r | ConvertTo-Json -Depth 1\\).Substring\\(0, 500\\))",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/2/injuries\" -UseBasicParsing | Select-Object -ExpandProperty Content; $r.Substring\\(0, 600\\))",
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:3000/api/teams/5/injuries\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; Write-Output \"Injuries for Cleveland \\($\\($r.injuries.Count\\) players\\):\"; $r.injuries | Format-Table displayName, position, status, updatedDate)"
     ]
   }
 }

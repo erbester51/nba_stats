@@ -536,6 +536,42 @@ class NBAService {
     };
   }
 
+  async getTeamInjuries(espnTeamId) {
+    try {
+      const response = await this.client.get(`${ESPN_BASE}/teams/${espnTeamId}/roster`);
+      const athletes = response.data?.athletes || [];
+
+      const injured = athletes
+        .filter(athlete => {
+          const inj = athlete.injuries;
+          if (!inj) return false;
+          const arr = Array.isArray(inj) ? inj : [inj];
+          return arr.length > 0;
+        })
+        .map(athlete => {
+          const arr = Array.isArray(athlete.injuries) ? athlete.injuries : [athlete.injuries];
+          const inj = arr[0] || {};
+          return {
+            playerId: athlete.id,
+            displayName: athlete.displayName,
+            position: athlete.position?.abbreviation || null,
+            headshot: athlete.headshot?.href || null,
+            status: inj.status || 'Out',
+            updatedDate: inj.date || null
+          };
+        })
+        .sort((a, b) => {
+          const order = { 'Day-To-Day': 0, 'Questionable': 1, 'Out': 2 };
+          return (order[a.status] ?? 3) - (order[b.status] ?? 3);
+        });
+
+      return { teamId: espnTeamId, injuries: injured };
+    } catch (error) {
+      console.warn(`Error fetching injuries for team ${espnTeamId}:`, error.message);
+      return { teamId: espnTeamId, injuries: [] };
+    }
+  }
+
   async getTeamSeasonLeaders(espnTeamId) {
     if (this.teamSeasonLeadersCache[espnTeamId]) {
       return this.teamSeasonLeadersCache[espnTeamId];

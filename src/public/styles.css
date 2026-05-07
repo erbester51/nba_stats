@@ -1095,6 +1095,121 @@ button:active {
   color: var(--accent);
 }
 
+/* ── Injury Report ───────────────────────────────── */
+
+.injury-section {
+  margin-top: 20px;
+  border-top: 1px solid var(--border);
+  padding-top: 16px;
+}
+
+.injury-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--accent);
+  border-left: 3px solid var(--accent);
+  padding-left: 8px;
+  margin-bottom: 14px;
+}
+
+.injury-count {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.injury-none {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  margin: 0;
+}
+
+.injury-list {
+  display: grid;
+  gap: 8px;
+}
+
+.injury-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.04);
+}
+
+.injury-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  flex-shrink: 0;
+}
+
+.injury-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.injury-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.injury-position {
+  font-size: 0.74rem;
+  color: var(--text-muted);
+  margin-top: 1px;
+}
+
+.injury-status-badge {
+  font-size: 0.67rem;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.injury-status-badge.out {
+  background: rgba(200, 16, 46, 0.18);
+  color: var(--accent);
+  border: 1px solid rgba(200, 16, 46, 0.3);
+}
+
+.injury-status-badge.dtd {
+  background: rgba(245, 166, 35, 0.15);
+  color: #f5a623;
+  border: 1px solid rgba(245, 166, 35, 0.3);
+}
+
+.injury-status-badge.questionable {
+  background: rgba(255, 200, 0, 0.12);
+  color: #f0c040;
+  border: 1px solid rgba(255, 200, 0, 0.25);
+}
+
+.injury-date {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
 /* ── Clickable Player Cards ─────────────────────── */
 
 .clickable-player {

@@ -19,15 +19,12 @@ const dom = {
   playerSeason: document.getElementById('player-season'),
   playerSeasonStats: document.getElementById('player-season-stats'),
   playerGameLog: document.getElementById('player-game-log'),
-  seasonSelect: document.getElementById('season-select'),
-  seasonSummary: document.getElementById('season-summary')
 };
 
 const state = {
   teams: [],
   teamLogos: {},
-  lastPlayerStats: null,
-  seasons: []
+  lastPlayerStats: null
 };
 
 let liveRefreshTimeout = null;
@@ -338,6 +335,48 @@ async function loadPlayers() {
   }
 }
 
+function renderInjuryReport(injuryData) {
+  if (!injuryData) return '';
+  const injuries = injuryData.injuries || [];
+  if (!injuries.length) {
+    return `
+      <div class="injury-section">
+        <div class="injury-section-title">Injury Report</div>
+        <p class="injury-none">No players currently listed on the injury report.</p>
+      </div>
+    `;
+  }
+
+  const statusOrder = { 'Day-To-Day': 'dtd', 'Questionable': 'questionable', 'Out': 'out' };
+
+  const rows = injuries.map(player => {
+    const statusClass = statusOrder[player.status] || 'out';
+    const statusLabel = player.status === 'Day-To-Day' ? 'DTD' : player.status;
+    const updated = player.updatedDate
+      ? new Date(player.updatedDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      : null;
+
+    return `
+      <div class="injury-item">
+        <img class="injury-avatar" src="${player.headshot || 'https://via.placeholder.com/36?text=?'}" alt="${player.displayName}" />
+        <div class="injury-info">
+          <div class="injury-name">${player.displayName}</div>
+          ${player.position ? `<div class="injury-position">${player.position}</div>` : ''}
+        </div>
+        <span class="injury-status-badge ${statusClass}">${statusLabel}</span>
+        ${updated ? `<span class="injury-date">Updated ${updated}</span>` : ''}
+      </div>
+    `;
+  }).join('');
+
+  return `
+    <div class="injury-section">
+      <div class="injury-section-title">Injury Report <span class="injury-count">${injuries.length} player${injuries.length !== 1 ? 's' : ''}</span></div>
+      <div class="injury-list">${rows}</div>
+    </div>
+  `;
+}
+
 function renderSeasonLeadersGrid(leaders, title, type) {
   if (!leaders) return '';
   const categories = [
@@ -366,9 +405,10 @@ async function showTeamStats(teamId) {
 
   dom.teamInfo.innerHTML = '<p class="loader">Loading team stats...</p>';
   try {
-    const [stats, leadersData] = await Promise.all([
+    const [stats, leadersData, injuryData] = await Promise.all([
       fetchJson(`${apiBase}/teams/${teamId}/stats`),
-      fetchJson(`${apiBase}/teams/${teamId}/leaders`).catch(() => null)
+      fetchJson(`${apiBase}/teams/${teamId}/leaders`).catch(() => null),
+      fetchJson(`${apiBase}/teams/${teamId}/injuries`).catch(() => null)
     ]);
     setBackgroundLogo(stats.logo || null);
     const overall = stats.record?.items?.find(item => item.type === 'total') || {};
@@ -397,6 +437,7 @@ async function showTeamStats(teamId) {
           renderSeasonLeadersGrid(leadersData.playoffLeaders, '2025-26 Playoff Leaders', 'playoffs'),
           renderSeasonLeadersGrid(leadersData.regularLeaders, '2025-26 Regular Season Leaders', 'regular')
         ].join('') : ''}
+        ${renderInjuryReport(injuryData)}
       </div>
     `;
   } catch (error) {
@@ -759,14 +800,6 @@ function animateStatValues(container) {
   });
 }
 
-function populateSeasonDropdown() {
-  const now = new Date();
-  const year = now.getFullYear();
-  const labelYears = [`${year - 1}-${String(year).slice(-2)}`, `${year - 2}-${String(year - 1).slice(-2)}`, `${year - 3}-${String(year - 2).slice(-2)}`, `${year - 4}-${String(year - 3).slice(-2)}`];
-  state.seasons = labelYears;
-  dom.seasonSelect.innerHTML = labelYears.map(yearLabel => `<option value="${yearLabel}">${yearLabel}</option>`).join('');
-  dom.seasonSummary.innerHTML = `<p>Selected season: ${dom.seasonSelect.value}. Use the Player tab to view historical season stats for an individual player.</p>`;
-}
 
 function handleTabClick(event) {
   const tabName = event.target.dataset.tab;
@@ -813,12 +846,7 @@ async function init() {
     }
   });
   dom.playerSeason.addEventListener('change', renderSelectedSeason);
-  dom.seasonSelect.addEventListener('change', () => {
-    dom.seasonSummary.innerHTML = `<p>Selected season: ${dom.seasonSelect.value}. Use the Player tab to see detailed season stats for a player.</p>`;
-  });
-
   await Promise.all([loadGames(), loadTeams(), loadPlayers(), loadNews()]);
-  populateSeasonDropdown();
 }
 
 window.addEventListener('DOMContentLoaded', init);
