@@ -24,6 +24,17 @@ exports.getTeamStats = async (req, res) => {
   }
 };
 
+exports.getTeamSeasonLeaders = async (req, res) => {
+  try {
+    const { teamId } = req.params;
+    const leaders = await nbaService.getTeamSeasonLeaders(teamId);
+    res.json(leaders);
+  } catch (error) {
+    console.error('Controller error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 exports.getStandings = async (req, res) => {
   try {
     const standings = await nbaService.getStandings();

@@ -5,6 +5,10 @@ const dom = {
   panels: document.querySelectorAll('.tab-panel'),
   gamesList: document.getElementById('games-list'),
   gamesLoading: document.getElementById('games-loading'),
+  breakingCarousel: document.getElementById('breaking-carousel'),
+  breakingNewsLoading: document.getElementById('breaking-news-loading'),
+  newsFeed: document.getElementById('news-feed'),
+  newsLoading: document.getElementById('news-loading'),
   teamSelect: document.getElementById('team-select'),
   teamInfo: document.getElementById('team-info'),
   playerSelect: document.getElementById('player-select'),
@@ -26,6 +30,8 @@ const state = {
   seasons: []
 };
 
+let liveRefreshTimeout = null;
+
 function setActiveTab(tabName) {
   dom.tabs.forEach(button => {
     button.classList.toggle('active', button.dataset.tab === tabName);
@@ -33,6 +39,9 @@ function setActiveTab(tabName) {
   dom.panels.forEach(panel => {
     panel.classList.toggle('active', panel.id === tabName);
   });
+  if (tabName !== 'team' && tabName !== 'player') {
+    setBackgroundLogo(null);
+  }
 }
 
 async function fetchJson(url) {
@@ -41,8 +50,11 @@ async function fetchJson(url) {
   return res.json();
 }
 
+const espnAbbrMap = { GSW: 'GS', NYK: 'NY', NOP: 'NO', SAS: 'SA', UTA: 'UTAH', WAS: 'WSH' };
+
 function getTeamLogoByAbbreviation(abbr) {
-  return state.teamLogos[abbr] || null;
+  if (!abbr) return null;
+  return state.teamLogos[abbr] || state.teamLogos[espnAbbrMap[abbr]] || null;
 }
 
 function parseMatchupAbbreviations(matchup) {
@@ -57,13 +69,55 @@ function parseMatchupAbbreviations(matchup) {
   return { playerTeamAbbr: null, opponentAbbr: null };
 }
 
+function getClockDisplay(game) {
+  if (game.statusState === 'pre') return { text: 'Not Yet Started', live: false };
+  if (game.statusState === 'post') return null;
+  const detail = (game.statusDetail || '').toLowerCase();
+  if (detail.includes('halftime')) return { text: 'Halftime', live: false };
+  const quarter = game.period > 4 ? `OT${game.period - 4}` : game.period ? `Q${game.period}` : '';
+  const clock = game.displayClock || '';
+  const text = [quarter, clock].filter(Boolean).join(' ');
+  return { text, live: true };
+}
+
+
 function formatGameCard(game) {
+  const gameDate = new Date(game.date);
+  const formattedTime = gameDate.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+  const formattedDate = gameDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+  const statusLower = (game.status || '').toLowerCase();
+  const isLive = statusLower.includes('progress') || statusLower.includes('quarter') || statusLower.includes('half');
+  const isFinal = statusLower.includes('final');
+  const statusClass = isLive ? 'in-progress' : isFinal ? 'final' : statusLower.replace(/\s+/g, '-');
+
   return `
-    <div class="card game-card">
-      <h3>${game.awayTeam} @ ${game.homeTeam}</h3>
-      <p>Status: ${game.status}</p>
-      <p>${game.date ? new Date(game.date).toLocaleString() : ''}</p>
-      <p>Venue: ${game.venue || 'TBD'}</p>
+    <div class="card game-card card-animate">
+      <div class="game-header">
+        <div class="game-meta">
+          <div class="game-date">${formattedDate} @ ${formattedTime}</div>
+          <div class="game-status-badge ${statusClass}">${game.status}</div>
+        </div>
+        <div class="game-scores">
+          <div class="team-block away">
+            <span class="team-name">${game.awayTeam}</span>
+            <span class="team-score">${game.awayScore}</span>
+          </div>
+          <div class="game-separator">
+          <span>vs</span>
+          ${(() => {
+            const clock = getClockDisplay(game);
+            if (!clock) return '';
+            return `<div class="game-clock-display${clock.live ? ' live' : ''}">${clock.text}</div>`;
+          })()}
+        </div>
+          <div class="team-block home">
+            <span class="team-name">${game.homeTeam}</span>
+            <span class="team-score">${game.homeScore}</span>
+          </div>
+        </div>
+        <div class="game-venue">${game.venue || 'TBD'}</div>
+      </div>
       <div class="starters-row">
         <div class="starter-team">
           <h4>${game.awayTeam} Starters</h4>
@@ -74,14 +128,19 @@ function formatGameCard(game) {
           <div id="starters-home-${game.gameId}" class="starter-grid"><p class="loader">Loading starters...</p></div>
         </div>
       </div>
-      <div class="leaders-row">
-        <div class="leader-team">
-          <h4>${game.awayTeam} Season Leaders</h4>
-          ${renderTeamLeaderSection(game.awayLeaders)}
+      <div class="leaders-section">
+        <div class="last-meeting-label">
+          Last Matchup Leaders${game.lastMeetingDate ? ' &mdash; ' + new Date(game.lastMeetingDate).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : ''}
         </div>
-        <div class="leader-team">
-          <h4>${game.homeTeam} Season Leaders</h4>
-          ${renderTeamLeaderSection(game.homeLeaders)}
+        <div class="leaders-row">
+          <div class="leader-team">
+            <h4>${game.awayTeam}</h4>
+            ${renderTeamLeaderSection(game.awayLeaders)}
+          </div>
+          <div class="leader-team">
+            <h4>${game.homeTeam}</h4>
+            ${renderTeamLeaderSection(game.homeLeaders)}
+          </div>
         </div>
       </div>
     </div>
@@ -90,7 +149,7 @@ function formatGameCard(game) {
 
 function renderTeamLeaderSection(leaders) {
   if (!leaders) {
-    return '<p class="loader">Loading team leaders...</p>';
+    return '<p style="color:var(--text-muted);font-size:0.85rem;margin:0">No matchup data available</p>';
   }
 
   const categories = [
@@ -121,7 +180,7 @@ function renderLeaderCard(label, leader) {
   }
 
   return `
-    <div class="leader-item">
+    <div class="leader-item clickable-player" data-player-id="${leader.playerId}" data-player-name="${leader.displayName || 'Player'}" title="View last 10 games">
       <img class="leader-avatar" src="${leader.headshot || 'https://via.placeholder.com/42?text=?'}" alt="${leader.displayName || 'Player'}" />
       <div class="leader-detail">
         <strong>${label}: ${leader.value}</strong>
@@ -191,6 +250,7 @@ function buildStarterGrid(players, teamId) {
 async function loadGames() {
   dom.gamesLoading.classList.remove('hidden');
   dom.gamesList.innerHTML = '';
+  if (liveRefreshTimeout) { clearTimeout(liveRefreshTimeout); liveRefreshTimeout = null; }
 
   try {
     const data = await fetchJson(`${apiBase}/games/scores?includeLeaders=1`);
@@ -201,6 +261,11 @@ async function loadGames() {
     }
 
     dom.gamesList.innerHTML = data.scores.map(formatGameCard).join('');
+
+    const hasLive = data.scores.some(g => g.statusState === 'in');
+    if (hasLive) {
+      liveRefreshTimeout = setTimeout(loadGames, 30000);
+    }
 
     await Promise.allSettled(data.scores.map(async game => {
       const awayContainer = document.getElementById(`starters-away-${game.gameId}`);
@@ -273,26 +338,65 @@ async function loadPlayers() {
   }
 }
 
+function renderSeasonLeadersGrid(leaders, title, type) {
+  if (!leaders) return '';
+  const categories = [
+    { key: 'points',   label: 'PPG' },
+    { key: 'rebounds', label: 'RPG' },
+    { key: 'assists',  label: 'APG' },
+    { key: 'steals',   label: 'SPG' },
+    { key: 'blocks',   label: 'BPG' },
+    { key: 'threes',   label: '3PM' }
+  ];
+  return `
+    <div class="team-leaders-section">
+      <div class="team-leaders-title ${type}">${title}</div>
+      <div class="leader-grid">
+        ${categories.map(c => renderLeaderCard(c.label, leaders[c.key])).join('')}
+      </div>
+    </div>
+  `;
+}
+
 async function showTeamStats(teamId) {
   if (!teamId) {
     dom.teamInfo.innerHTML = '<p>Select a team to see stats.</p>';
     return;
   }
 
+  dom.teamInfo.innerHTML = '<p class="loader">Loading team stats...</p>';
   try {
-    dom.teamInfo.innerHTML = '<p class="loader">Loading team stats...</p>';
-    const stats = await fetchJson(`${apiBase}/teams/${teamId}/stats`);
+    const [stats, leadersData] = await Promise.all([
+      fetchJson(`${apiBase}/teams/${teamId}/stats`),
+      fetchJson(`${apiBase}/teams/${teamId}/leaders`).catch(() => null)
+    ]);
+    setBackgroundLogo(stats.logo || null);
     const overall = stats.record?.items?.find(item => item.type === 'total') || {};
     const home = stats.record?.items?.find(item => item.type === 'home') || {};
     const away = stats.record?.items?.find(item => item.type === 'road') || {};
+
+    const chips = [
+      { label: 'Overall', value: overall.summary || 'N/A' },
+      { label: 'Home', value: home.summary || 'N/A' },
+      { label: 'Away', value: away.summary || 'N/A' },
+    ];
+
     dom.teamInfo.innerHTML = `
-      <div class="team-card">
+      <div class="team-card card-animate">
         <h3>${stats.displayName || stats.teamName || 'Team'}</h3>
-        <p>Abbreviation: ${stats.abbreviation || 'N/A'}</p>
-        <p>Location: ${stats.location || 'N/A'}</p>
-        <p>Overall: ${overall.summary || 'N/A'}</p>
-        <p>Home: ${home.summary || 'N/A'}</p>
-        <p>Away: ${away.summary || 'N/A'}</p>
+        <p class="team-meta">${stats.location || ''} &middot; ${stats.abbreviation || ''}</p>
+        <div class="stat-grid">
+          ${chips.map(c => `
+            <div class="stat-chip">
+              <span class="stat-label">${c.label}</span>
+              <span class="stat-value" style="font-size:1.15rem">${c.value}</span>
+            </div>
+          `).join('')}
+        </div>
+        ${leadersData ? [
+          renderSeasonLeadersGrid(leadersData.playoffLeaders, '2025-26 Playoff Leaders', 'playoffs'),
+          renderSeasonLeadersGrid(leadersData.regularLeaders, '2025-26 Regular Season Leaders', 'regular')
+        ].join('') : ''}
       </div>
     `;
   } catch (error) {
@@ -312,12 +416,25 @@ function renderPlayerStats(data) {
   const playerName = data.playerInfo?.resultSets?.[0]?.rowSet?.[0]?.[3] || data.playerInfo?.resultSets?.[0]?.rowSet?.[0]?.[1] || 'Player';
   const currentSeason = data.seasonStats?.currentSeason;
   const seasons = [currentSeason, ...(data.seasonStats?.last4Seasons || [])].filter(Boolean);
+  setBackgroundLogo(getTeamLogoByAbbreviation(currentSeason?.TEAM_ABBREVIATION) || null);
 
   dom.playerInfo.innerHTML = `
-    <div class="player-card">
+    <div class="player-card card-animate">
       <h3>${playerName}</h3>
-      <p>Player ID: ${data.playerId}</p>
-      <p>Current season: ${currentSeason?.SEASON_ID || 'N/A'}</p>
+      <div class="stat-grid">
+        <div class="stat-chip">
+          <span class="stat-label">Season</span>
+          <span class="stat-value" style="font-size:1rem">${currentSeason?.SEASON_ID || 'N/A'}</span>
+        </div>
+        <div class="stat-chip">
+          <span class="stat-label">Team</span>
+          <span class="stat-value" style="font-size:1rem">${currentSeason?.TEAM_ABBREVIATION || 'N/A'}</span>
+        </div>
+        <div class="stat-chip">
+          <span class="stat-label">ID</span>
+          <span class="stat-value" style="font-size:0.9rem">${data.playerId}</span>
+        </div>
+      </div>
     </div>
   `;
 
@@ -331,29 +448,51 @@ function renderPlayerStats(data) {
   dom.playerSeason.innerHTML = seasons
     .map(season => `<option value="${season.SEASON_ID}">${season.SEASON_ID}</option>`)
     .join('');
-  state.lastPlayerStats = { data, seasons };
+  state.lastPlayerStats = { data, seasons, playoffSeasons: data.seasonStats?.playoffSeasons || [] };
   renderSelectedSeason();
   loadPlayerGameLog(data.playerId);
 }
 
 function renderSelectedSeason() {
   const selectedSeason = dom.playerSeason.value;
-  const seasonStats = state.lastPlayerStats?.seasons?.find(s => s.SEASON_ID === selectedSeason);
-  if (!seasonStats) {
+  const regularStats = state.lastPlayerStats?.seasons?.find(s => s.SEASON_ID === selectedSeason);
+  const playoffStats = state.lastPlayerStats?.playoffSeasons?.find(s => s.SEASON_ID === selectedSeason);
+
+  if (!regularStats && !playoffStats) {
     dom.playerSeasonStats.innerHTML = '<p>Select a season to view stats.</p>';
     return;
   }
 
+  const buildCard = (stats, type) => {
+    const chips = [
+      { label: 'PPG', value: stats.PTS, highlight: true },
+      { label: 'APG', value: stats.AST },
+      { label: 'RPG', value: stats.REB },
+      { label: 'GP',  value: stats.GP },
+      { label: 'Team', value: stats.TEAM_ABBREVIATION },
+    ];
+    return `
+      <div class="player-card card-animate">
+        <div class="season-type-header ${type}">${type === 'playoffs' ? 'Playoffs' : 'Regular Season'}</div>
+        <div class="stat-grid">
+          ${chips.map(c => `
+            <div class="stat-chip">
+              <span class="stat-label">${c.label}</span>
+              <span class="stat-value${c.highlight ? ' highlight' : ''}">${c.value != null ? c.value : 'N/A'}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+    `;
+  };
+
   dom.playerSeasonStats.innerHTML = `
-    <div class="player-card">
-      <h3>${seasonStats.SEASON_ID}</h3>
-      <p>Team: ${seasonStats.TEAM_ABBREVIATION || 'N/A'}</p>
-      <p>Games played: ${seasonStats.GP || 'N/A'}</p>
-      <p>Points per game: ${seasonStats.PTS || 'N/A'}</p>
-      <p>Assists per game: ${seasonStats.AST || 'N/A'}</p>
-      <p>Rebounds per game: ${seasonStats.REB || 'N/A'}</p>
+    <div class="season-stats-grid">
+      ${regularStats ? buildCard(regularStats, 'regular') : ''}
+      ${playoffStats ? buildCard(playoffStats, 'playoffs') : ''}
     </div>
   `;
+  animateStatValues(dom.playerSeasonStats);
 }
 
 async function loadPlayerGameLog(playerId) {
@@ -366,37 +505,28 @@ async function loadPlayerGameLog(playerId) {
   }
 }
 
-function renderGameLog(data) {
-  if (data.error || !data.games || data.games.length === 0) {
-    dom.playerGameLog.innerHTML = '<p>No game logs available.</p>';
-    return;
-  }
-
-  const games = data.games || [];
-  if (games.length === 0) {
-    dom.playerGameLog.innerHTML = '<p>No games found.</p>';
-    return;
-  }
-
-  const headers = ['DATE', 'OPP', 'RESULT', 'MIN', 'FG', 'FG%', '3PT', '3P%', 'FT', 'FT%', 'REB', 'AST', 'BLK', 'STL', 'PF', 'TO', 'PTS'];
-
-  let html = '<h4>Game Log</h4><table class="game-log-table"><thead><tr>';
-  headers.forEach(h => html += `<th>${h}</th>`);
-  html += '</tr></thead><tbody>';
-
+function buildGameTable(title, games, type) {
+  const cols = ['DATE', 'OPP', 'RESULT', 'MIN', 'FG', 'FG%', '3PT', '3P%', 'FT', 'FT%', 'REB', 'AST', 'BLK', 'STL', 'PF', 'TO', 'PTS'];
+  let html = `
+    <div class="game-log-section">
+      <div class="season-type-header ${type}">
+        ${title}
+        <span class="game-count">${games.length} games</span>
+      </div>
+      <table class="game-log-table"><thead><tr>
+        ${cols.map(h => `<th>${h}</th>`).join('')}
+      </tr></thead><tbody>
+  `;
   games.forEach(game => {
     const date = game.GAME_DATE ? new Date(game.GAME_DATE).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '-';
     const matchup = game.MATCHUP || '-';
     const { playerTeamAbbr, opponentAbbr } = parseMatchupAbbreviations(matchup);
     const playerLogo = getTeamLogoByAbbreviation(playerTeamAbbr);
     const oppLogo = getTeamLogoByAbbreviation(opponentAbbr);
-    const result = game.WL || '-';
-    const resultLabel = game.SEASON_TYPE === 'Playoffs' ? `${result} <span class="game-type">PO</span>` : result;
-    const oppDisplay = matchup;
     const stats = {
       'DATE': date,
-      'OPP': `<div class="opp-cell">${playerLogo ? `<img class="opp-logo" src="${playerLogo}" alt="${playerTeamAbbr || 'Team'}" />` : ''}${oppLogo ? `<img class="opp-logo" src="${oppLogo}" alt="${opponentAbbr || 'opp'}" />` : ''}<span>${oppDisplay}</span></div>`,
-      'RESULT': resultLabel,
+      'OPP': `<div class="opp-cell">${oppLogo ? `<img class="opp-logo" src="${oppLogo}" alt="${opponentAbbr}" />` : ''}<span>${matchup}</span></div>`,
+      'RESULT': game.WL || '-',
       'MIN': game.MIN || '-',
       'FG': `${game.FGM || 0}-${game.FGA || 0}`,
       'FG%': game.FG_PCT ? (game.FG_PCT * 100).toFixed(1) : '-',
@@ -412,13 +542,266 @@ function renderGameLog(data) {
       'TO': game.TO || '-',
       'PTS': game.PTS || '-'
     };
-    html += '<tr>';
-    headers.forEach(h => html += `<td>${stats[h] || '-'}</td>`);
-    html += '</tr>';
+    html += '<tr>' + cols.map(h => `<td>${stats[h] ?? '-'}</td>`).join('') + '</tr>';
+  });
+  html += '</tbody></table></div>';
+  return html;
+}
+
+function renderGameLog(data) {
+  if (data.error || !data.games || data.games.length === 0) {
+    dom.playerGameLog.innerHTML = '<p>No game logs available.</p>';
+    return;
+  }
+
+  const playoffGames = data.games.filter(g => g.SEASON_TYPE === 'Playoffs');
+  const regularGames = data.games.filter(g => g.SEASON_TYPE !== 'Playoffs');
+
+  let html = '';
+  if (playoffGames.length > 0) html += buildGameTable('Playoffs', playoffGames, 'playoffs');
+  if (regularGames.length > 0) html += buildGameTable('Regular Season', regularGames, 'regular');
+  dom.playerGameLog.innerHTML = html || '<p>No game logs available.</p>';
+}
+
+async function loadNews() {
+  dom.breakingNewsLoading.classList.remove('hidden');
+  dom.newsLoading.classList.remove('hidden');
+  dom.breakingCarousel.innerHTML = '';
+  dom.newsFeed.innerHTML = '';
+
+  try {
+    const data = await fetchJson(`${apiBase}/news`);
+    dom.breakingNewsLoading.classList.add('hidden');
+    dom.newsLoading.classList.add('hidden');
+
+    if (data.breaking && data.breaking.length > 0) {
+      renderBreakingNews(data.breaking);
+    } else {
+      dom.breakingCarousel.innerHTML = '<p>No breaking news available.</p>';
+    }
+
+    if (data.general && data.general.length > 0) {
+      renderNewsFeed(data.general);
+    } else {
+      dom.newsFeed.innerHTML = '<p>No news available.</p>';
+    }
+  } catch (error) {
+    dom.breakingNewsLoading.classList.add('hidden');
+    dom.newsLoading.classList.add('hidden');
+    dom.breakingCarousel.innerHTML = `<p>Error loading breaking news: ${error.message}</p>`;
+    dom.newsFeed.innerHTML = `<p>Error loading news: ${error.message}</p>`;
+  }
+}
+
+function renderBreakingNews(articles) {
+  let html = '';
+
+  articles.forEach((article, index) => {
+    const date = new Date(article.publishTime).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    html += `
+      <div class="news-card breaking-news-card">
+        <div class="breaking-badge">BREAKING</div>
+        <div class="news-card-content">
+          <h3>${article.title}</h3>
+          <p>${article.snippet}</p>
+          <div class="news-card-footer">
+            <span class="news-source">${article.source}</span>
+            <span class="news-date">${date}</span>
+          </div>
+          <a href="${article.url}" target="_blank" class="news-link">Read More →</a>
+        </div>
+      </div>
+    `;
+  });
+
+  dom.breakingCarousel.innerHTML = html ? `<div class="carousel-container">${html}</div>` : '<p>No breaking news.</p>';
+  startCarousel();
+}
+
+function renderNewsFeed(articles) {
+  let html = '';
+
+  articles.forEach(article => {
+    const date = new Date(article.publishTime).toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric'
+    });
+
+    html += `
+      <div class="card news-card">
+        <div class="news-card-header">
+          <h3>${article.title}</h3>
+        </div>
+        <p>${article.snippet}</p>
+        <div class="news-card-footer">
+          <span class="news-source">${article.source}</span>
+          <span class="news-date">${date}</span>
+        </div>
+        <a href="${article.url}" target="_blank" class="news-link">Read Full Story →</a>
+      </div>
+    `;
+  });
+
+  dom.newsFeed.innerHTML = html || '<p>No news available.</p>';
+}
+
+let carouselIndex = 0;
+let carouselInterval = null;
+
+function startCarousel() {
+  const cards = dom.breakingCarousel.querySelectorAll('.breaking-news-card');
+  if (cards.length === 0) return;
+
+  if (cards.length === 1) {
+    cards[0].classList.add('active');
+    return;
+  }
+
+  const dotsEl = document.createElement('div');
+  dotsEl.className = 'carousel-dots';
+  cards.forEach((_, i) => {
+    const dot = document.createElement('button');
+    dot.className = 'carousel-dot' + (i === 0 ? ' active' : '');
+    dot.addEventListener('click', () => goToSlide(i));
+    dotsEl.appendChild(dot);
+  });
+  dom.breakingCarousel.appendChild(dotsEl);
+
+  function goToSlide(index) {
+    carouselIndex = index;
+    cards.forEach((card, i) => card.classList.toggle('active', i === index));
+    dotsEl.querySelectorAll('.carousel-dot').forEach((dot, i) => {
+      dot.classList.toggle('active', i === index);
+    });
+  }
+
+  goToSlide(0);
+  clearInterval(carouselInterval);
+  carouselInterval = setInterval(() => goToSlide((carouselIndex + 1) % cards.length), 5000);
+}
+
+function setBackgroundLogo(logoUrl) {
+  let el = document.getElementById('bg-logo');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'bg-logo';
+    el.className = 'bg-logo-overlay';
+    document.body.appendChild(el);
+  }
+  el.style.opacity = '0';
+  if (!logoUrl) return;
+  setTimeout(() => {
+    el.style.backgroundImage = `url('${logoUrl}')`;
+    el.style.opacity = '0.07';
+  }, 300);
+}
+
+function createModal() {
+  if (document.getElementById('player-modal')) return;
+  const overlay = document.createElement('div');
+  overlay.id = 'player-modal';
+  overlay.className = 'modal-overlay hidden';
+  overlay.innerHTML = `
+    <div class="modal-container">
+      <div class="modal-header">
+        <div>
+          <h3 id="modal-player-name"></h3>
+          <p class="modal-subtitle">Last 10 Games</p>
+        </div>
+        <button class="modal-close" id="modal-close-btn">&times;</button>
+      </div>
+      <div id="modal-content" class="modal-content"></div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  document.getElementById('modal-close-btn').addEventListener('click', closePlayerModal);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closePlayerModal(); });
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closePlayerModal(); });
+}
+
+function closePlayerModal() {
+  const modal = document.getElementById('player-modal');
+  if (modal) modal.classList.add('hidden');
+  document.body.style.overflow = '';
+}
+
+async function openPlayerModal(playerId, playerName) {
+  const modal = document.getElementById('player-modal');
+  document.getElementById('modal-player-name').textContent = playerName;
+  document.getElementById('modal-content').innerHTML = '<p class="loader">Loading last 10 games...</p>';
+  modal.classList.remove('hidden');
+  document.body.style.overflow = 'hidden';
+
+  try {
+    const data = await fetchJson(`${apiBase}/players/${encodeURIComponent(playerName)}/gamelogs`);
+    const sorted = (data.games || []).slice().sort((a, b) => new Date(b.GAME_DATE) - new Date(a.GAME_DATE));
+    const last10 = sorted.slice(0, 10);
+    document.getElementById('modal-content').innerHTML = last10.length
+      ? buildModalGameTable(last10)
+      : '<p>No recent games found.</p>';
+  } catch (err) {
+    document.getElementById('modal-content').innerHTML = `<p>Error loading games: ${err.message}</p>`;
+  }
+}
+
+function buildModalGameTable(games) {
+  const cols = ['DATE', 'OPP', 'RESULT', 'MIN', 'PTS', 'REB', 'AST', 'STL', 'BLK', 'FG', '3PT', 'FT'];
+  let html = `<table class="game-log-table"><thead><tr>${cols.map(h => `<th>${h}</th>`).join('')}</tr></thead><tbody>`;
+
+  games.forEach(game => {
+    const date = game.GAME_DATE
+      ? new Date(game.GAME_DATE).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })
+      : '-';
+    const matchup = game.MATCHUP || '-';
+    const { opponentAbbr } = parseMatchupAbbreviations(matchup);
+    const oppLogo = getTeamLogoByAbbreviation(opponentAbbr);
+    const isPlayoff = game.SEASON_TYPE === 'Playoffs';
+    const pts = Number(game.PTS) || 0;
+
+    const row = {
+      'DATE': date,
+      'OPP': `<div class="opp-cell">${oppLogo ? `<img class="opp-logo" src="${oppLogo}" alt="${opponentAbbr}" />` : ''}<span>${matchup}</span></div>`,
+      'RESULT': `${game.WL || '-'}${isPlayoff ? ' <span class="game-type">PO</span>' : ''}`,
+      'MIN': game.MIN || '-',
+      'PTS': `<span class="${pts >= 30 ? 'stat-highlight' : ''}">${pts || '-'}</span>`,
+      'REB': game.REB || '-',
+      'AST': game.AST || '-',
+      'STL': game.STL || '-',
+      'BLK': game.BLK || '-',
+      'FG':  `${game.FGM || 0}-${game.FGA || 0}`,
+      '3PT': `${game.FG3M || 0}-${game.FG3A || 0}`,
+      'FT':  `${game.FTM || 0}-${game.FTA || 0}`,
+    };
+    html += '<tr>' + cols.map(h => `<td>${row[h] ?? '-'}</td>`).join('') + '</tr>';
   });
 
   html += '</tbody></table>';
-  dom.playerGameLog.innerHTML = html;
+  return html;
+}
+
+function animateStatValues(container) {
+  container.querySelectorAll('.stat-value').forEach(el => {
+    const raw = el.textContent.trim();
+    const num = parseFloat(raw);
+    if (isNaN(num) || raw.includes('-') || raw.length > 6) return;
+    const isDecimal = raw.includes('.');
+    const decimals = isDecimal ? (raw.split('.')[1] || '').length : 0;
+    const duration = 700;
+    const startTime = performance.now();
+    function update(now) {
+      const progress = Math.min((now - startTime) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      el.textContent = isDecimal ? (eased * num).toFixed(decimals) : Math.round(eased * num);
+      if (progress < 1) requestAnimationFrame(update);
+    }
+    requestAnimationFrame(update);
+  });
 }
 
 function populateSeasonDropdown() {
@@ -437,8 +820,19 @@ function handleTabClick(event) {
 }
 
 async function init() {
+  createModal();
   dom.tabs.forEach(tab => tab.addEventListener('click', handleTabClick));
+  dom.gamesList.addEventListener('click', e => {
+    const card = e.target.closest('.clickable-player');
+    if (!card) return;
+    openPlayerModal(card.dataset.playerId, card.dataset.playerName);
+  });
   dom.teamSelect.addEventListener('change', e => showTeamStats(e.target.value));
+  dom.teamInfo.addEventListener('click', e => {
+    const card = e.target.closest('.clickable-player');
+    if (!card) return;
+    openPlayerModal(card.dataset.playerId, card.dataset.playerName);
+  });
   dom.playerSelect.addEventListener('change', async () => {
     const selectedId = dom.playerSelect.value;
     if (!selectedId) return;
@@ -468,7 +862,7 @@ async function init() {
     dom.seasonSummary.innerHTML = `<p>Selected season: ${dom.seasonSelect.value}. Use the Player tab to see detailed season stats for a player.</p>`;
   });
 
-  await Promise.all([loadGames(), loadTeams(), loadPlayers()]);
+  await Promise.all([loadGames(), loadTeams(), loadPlayers(), loadNews()]);
   populateSeasonDropdown();
 }
 

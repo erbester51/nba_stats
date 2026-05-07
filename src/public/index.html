@@ -9,8 +9,18 @@
 <body>
   <header>
     <div class="brand">
-      <h1>NBA Live Dashboard</h1>
-      <p>Current games, starters, team and player stats in one place.</p>
+      <div class="logo-section">
+        <svg class="nba-logo" viewBox="0 0 120 120" xmlns="http://www.w3.org/2000/svg">
+          <circle cx="60" cy="60" r="55" fill="#1D428A"/>
+          <circle cx="60" cy="60" r="55" fill="none" stroke="#C8102E" stroke-width="3"/>
+          <text x="60" y="58" font-size="30" font-weight="900" fill="#ffffff" text-anchor="middle" font-family="Arial Black, Arial, sans-serif">NBA</text>
+          <text x="60" y="76" font-size="11" font-weight="700" fill="#C8102E" text-anchor="middle" font-family="Arial, sans-serif" letter-spacing="3">LIVE</text>
+        </svg>
+        <div class="header-text">
+          <h1>NBA Live Dashboard</h1>
+          <p>Current games, starters, team and player stats in one place.</p>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -29,6 +39,20 @@
       </div>
       <div id="games-loading" class="loader">Loading games...</div>
       <div id="games-list" class="grid"></div>
+
+      <div class="section-header" style="margin-top: 40px;">
+        <h2>Breaking News</h2>
+        <p>Latest NBA news and headlines.</p>
+      </div>
+      <div id="breaking-news-loading" class="loader">Loading breaking news...</div>
+      <div id="breaking-carousel" class="carousel"></div>
+
+      <div class="section-header" style="margin-top: 40px;">
+        <h2>NBA News</h2>
+        <p>More news from top sports outlets.</p>
+      </div>
+      <div id="news-loading" class="loader">Loading news...</div>
+      <div id="news-feed" class="grid"></div>
     </section>
 
     <section id="team" class="tab-panel">

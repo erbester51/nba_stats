@@ -11,4 +11,7 @@ router.get('/standings', teamsController.getStandings);
 // Get team stats
 router.get('/:teamId/stats', teamsController.getTeamStats);
 
+// Get team season leaders
+router.get('/:teamId/leaders', teamsController.getTeamSeasonLeaders);
+
 module.exports = router;

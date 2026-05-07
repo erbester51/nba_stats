@@ -17,6 +17,10 @@ class NBAService {
     this.teamsCache = null;
     this.teamRosterCache = {};
     this.playerGameTotalsCache = {};
+    this.lastMeetingCache = {};
+    this.leagueStatsCache = null;
+    this.leaguePlayoffStatsCache = null;
+    this.teamSeasonLeadersCache = {};
   }
 
   /**
@@ -65,6 +69,10 @@ class NBAService {
             gameId: game.id,
             date: game.date,
             status: typeof game.status?.type === 'object' ? game.status?.type?.description || game.status?.type?.name : game.status?.type || 'Unknown',
+            statusState: game.status?.type?.state || 'pre',
+            statusDetail: game.status?.type?.detail || '',
+            displayClock: game.status?.displayClock || '',
+            period: game.status?.period || 0,
             homeTeam: homeTeam?.displayName || homeTeam?.name || 'Unknown',
             homeTeamId: homeTeam?.id || null,
             awayTeam: awayTeam?.displayName || awayTeam?.name || 'Unknown',
@@ -80,12 +88,13 @@ class NBAService {
       }).filter(game => game !== null);
 
       if (includeLeaders && scores.length > 0) {
-        const teamIds = Array.from(new Set(scores.flatMap(game => [game.homeTeamId, game.awayTeamId]).filter(Boolean)));
-        const leadersByTeam = await this.getTeamLeadersForIds(teamIds);
-        scores = scores.map(game => ({
-          ...game,
-          homeLeaders: leadersByTeam[game.homeTeamId]?.leaders || null,
-          awayLeaders: leadersByTeam[game.awayTeamId]?.leaders || null
+        scores = await Promise.all(scores.map(async game => {
+          try {
+            const meeting = await this.getLastMeetingLeaders(game.homeTeamId, game.awayTeamId);
+            return { ...game, homeLeaders: meeting.homeLeaders, awayLeaders: meeting.awayLeaders, lastMeetingDate: meeting.gameDate };
+          } catch {
+            return { ...game, homeLeaders: null, awayLeaders: null, lastMeetingDate: null };
+          }
         }));
       }
 
@@ -360,6 +369,109 @@ class NBAService {
     }
   }
 
+  getStatFromPlayer(player, candidates) {
+    for (const key of candidates) {
+      const stat = (player.statistics || []).find(s => s.key === key || s.label === key);
+      if (stat !== undefined) {
+        const raw = stat.value ?? stat.displayValue ?? 0;
+        if (typeof raw === 'string' && raw.includes('-')) {
+          return parseInt(raw.split('-')[0], 10) || 0;
+        }
+        return parseFloat(raw) || 0;
+      }
+    }
+    return 0;
+  }
+
+  async getLastMeetingLeaders(homeTeamId, awayTeamId) {
+    const cacheKey = `${homeTeamId}-${awayTeamId}`;
+    if (this.lastMeetingCache[cacheKey]) {
+      return this.lastMeetingCache[cacheKey];
+    }
+
+    try {
+      // Fetch regular season and postseason schedules in parallel
+      const [regularRes, postRes] = await Promise.allSettled([
+        this.client.get(`${ESPN_BASE}/teams/${homeTeamId}/schedule?seasontype=2`),
+        this.client.get(`${ESPN_BASE}/teams/${homeTeamId}/schedule?seasontype=3`)
+      ]);
+
+      const events = [
+        ...(regularRes.status === 'fulfilled' ? regularRes.value.data?.events || [] : []),
+        ...(postRes.status === 'fulfilled' ? postRes.value.data?.events || [] : [])
+      ];
+
+      const completed = events
+        .filter(event => {
+          const comp = event.competitions?.[0];
+          // status lives on the competition, not the event
+          return (
+            comp?.status?.type?.completed === true &&
+            comp?.competitors?.some(c => String(c.team?.id) === String(awayTeamId))
+          );
+        })
+        .sort((a, b) => new Date(b.competitions?.[0]?.date || b.date) - new Date(a.competitions?.[0]?.date || a.date));
+
+      if (!completed.length) {
+        const empty = { homeLeaders: null, awayLeaders: null, gameDate: null };
+        this.lastMeetingCache[cacheKey] = empty;
+        return empty;
+      }
+
+      const lastGame = completed[0];
+      const gameDate = lastGame.competitions?.[0]?.date || lastGame.date;
+      const boxscore = await this.getGameBoxscore(lastGame.id);
+      const players = boxscore.players || [];
+
+      const statMap = {
+        points:   ['points', 'PTS'],
+        rebounds: ['rebounds', 'REB'],
+        assists:  ['assists', 'AST'],
+        blocks:   ['blocks', 'BLK'],
+        threes:   ['threePointFieldGoalsMade', '3PT', '3FGM']
+      };
+
+      const getLeadersForTeam = (teamId) => {
+        const teamPlayers = players.filter(p => String(p.teamId) === String(teamId) && !p.didNotPlay);
+        if (!teamPlayers.length) return null;
+
+        const leaders = {};
+        Object.entries(statMap).forEach(([cat, candidates]) => {
+          let best = null;
+          let bestVal = -1;
+          teamPlayers.forEach(player => {
+            const val = this.getStatFromPlayer(player, candidates);
+            if (val > bestVal) {
+              bestVal = val;
+              best = {
+                playerId: player.athleteId,
+                displayName: player.fullName,
+                headshot: player.headshot,
+                value: val
+              };
+            }
+          });
+          leaders[cat] = best;
+        });
+        return leaders;
+      };
+
+      const result = {
+        homeLeaders: getLeadersForTeam(homeTeamId),
+        awayLeaders: getLeadersForTeam(awayTeamId),
+        gameDate
+      };
+
+      this.lastMeetingCache[cacheKey] = result;
+      return result;
+    } catch (error) {
+      console.warn(`Error fetching last meeting for ${homeTeamId} vs ${awayTeamId}:`, error.message);
+      const empty = { homeLeaders: null, awayLeaders: null, gameDate: null };
+      this.lastMeetingCache[cacheKey] = empty;
+      return empty;
+    }
+  }
+
   async getTeamLeaders(teamId) {
     const roster = await this.getTeamRoster(teamId);
     if (!roster.length) {
@@ -393,17 +505,20 @@ class NBAService {
 
     playerTotals.forEach(player => {
       const totals = player.totals || {};
+      const games = totals.games || 0;
+      if (games === 0) return;
+
       Object.entries(leaderCategories).forEach(([key, meta]) => {
-        const value = Number(totals[key] || 0);
-        if (value > meta.value) {
-          meta.value = value;
+        const avg = Number(totals[key] || 0) / games;
+        if (avg > meta.value) {
+          meta.value = avg;
           meta.best = {
             playerId: player.playerId,
             displayName: player.displayName,
             fullName: player.fullName,
             headshot: player.headshot,
             position: player.position,
-            value
+            value: Math.round(avg * 10) / 10
           };
         }
       });
@@ -419,6 +534,110 @@ class NBAService {
         threes: leaderCategories.threes.best
       }
     };
+  }
+
+  async getTeamSeasonLeaders(espnTeamId) {
+    if (this.teamSeasonLeadersCache[espnTeamId]) {
+      return this.teamSeasonLeadersCache[espnTeamId];
+    }
+
+    const espnToNba = { GS: 'GSW', NY: 'NYK', NO: 'NOP', SA: 'SAS', UTAH: 'UTA', WSH: 'WAS' };
+    const teamInfo = await this.getTeamStats(espnTeamId);
+    const espnAbbr = teamInfo.abbreviation;
+    const nbaAbbr = espnToNba[espnAbbr] || espnAbbr;
+
+    const nbaHeaders = {
+      'Referer': 'https://www.nba.com',
+      'Origin': 'https://www.nba.com',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'application/json, text/plain, */*',
+      'Connection': 'keep-alive',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'x-nba-stats-origin': 'stats',
+      'x-nba-stats-token': 'true'
+    };
+
+    const baseParams = {
+      College: '', Conference: '', Country: '', DateFrom: '', DateTo: '',
+      Division: '', DraftPick: '', DraftYear: '', GameScope: '', GameSegment: '',
+      Height: '', LastNGames: 0, LeagueID: '00', Location: '',
+      MeasureType: 'Base', Month: 0, OpponentTeamID: 0, Outcome: '',
+      PORound: 0, PaceAdjust: 'N', PerMode: 'PerGame', Period: 0,
+      PlayerExperience: '', PlayerPosition: '', PlusMinus: 'N', Rank: 'N',
+      Season: '2025-26', SeasonSegment: '', ShotClockRange: '',
+      StarterBench: '', TeamID: 0, VsConference: '', VsDivision: '', Weight: ''
+    };
+
+    const fetchLeagueStats = async (seasonType, cacheKey) => {
+      if (!this[cacheKey]) {
+        try {
+          const response = await this.client.get(`${NBA_STATS_API}/leaguedashplayerstats`, {
+            params: { ...baseParams, SeasonType: seasonType },
+            headers: nbaHeaders
+          });
+          const resultSet = response.data?.resultSets?.[0] || {};
+          const rowHeaders = resultSet.headers || [];
+          this[cacheKey] = (resultSet.rowSet || []).map(row => {
+            const obj = {};
+            rowHeaders.forEach((h, i) => { obj[h] = row[i]; });
+            return obj;
+          });
+        } catch (err) {
+          console.warn(`Failed to fetch ${seasonType} stats:`, err.message);
+          this[cacheKey] = [];
+        }
+      }
+      return this[cacheKey];
+    };
+
+    const [regularStats, playoffStats] = await Promise.all([
+      fetchLeagueStats('Regular Season', 'leagueStatsCache'),
+      fetchLeagueStats('Playoffs', 'leaguePlayoffStatsCache')
+    ]);
+
+    const categories = [
+      { key: 'points',   statKey: 'PTS' },
+      { key: 'rebounds', statKey: 'REB' },
+      { key: 'assists',  statKey: 'AST' },
+      { key: 'steals',   statKey: 'STL' },
+      { key: 'blocks',   statKey: 'BLK' },
+      { key: 'threes',   statKey: 'FG3M' }
+    ];
+
+    const buildLeaders = (statsData, minGames) => {
+      const teamPlayers = statsData.filter(
+        p => p.TEAM_ABBREVIATION === nbaAbbr && (p.GP || 0) >= minGames
+      );
+      if (!teamPlayers.length) return null;
+
+      const leaders = {};
+      categories.forEach(({ key, statKey }) => {
+        let best = null;
+        let bestVal = -1;
+        teamPlayers.forEach(player => {
+          const val = Number(player[statKey] || 0);
+          if (val > bestVal) {
+            bestVal = val;
+            best = {
+              playerId: String(player.PLAYER_ID),
+              displayName: player.PLAYER_NAME,
+              headshot: `https://cdn.nba.com/headshots/nba/latest/1040x760/${player.PLAYER_ID}.png`,
+              value: Math.round(val * 10) / 10
+            };
+          }
+        });
+        leaders[key] = best;
+      });
+      return leaders;
+    };
+
+    const result = {
+      teamId: espnTeamId,
+      regularLeaders: buildLeaders(regularStats, 5),
+      playoffLeaders: buildLeaders(playoffStats, 1)
+    };
+    this.teamSeasonLeadersCache[espnTeamId] = result;
+    return result;
   }
 
   async getTeamLeadersForIds(teamIds) {
@@ -640,32 +859,28 @@ class NBAService {
       ]);
 
       const careerData = careerResponse.data || {};
-      const careerResultSet = careerData.resultSets?.find(rs => rs.name === 'SeasonTotalsRegularSeason') || careerData.resultSets?.[0] || {};
-      const careerHeaders = careerResultSet.headers || [];
-      const careerRows = careerResultSet.rowSet || [];
 
-      const seasonStats = careerRows.map(row => {
-        return careerHeaders.reduce((acc, header, index) => {
-          acc[header] = row[index];
-          return acc;
-        }, {});
-      });
+      const parseResultSet = (name) => {
+        const rs = careerData.resultSets?.find(r => r.name === name) || {};
+        const headers = rs.headers || [];
+        return (rs.rowSet || []).map(row => headers.reduce((acc, h, i) => { acc[h] = row[i]; return acc; }, {}));
+      };
 
-      const sortedSeasonStats = seasonStats.slice().sort((a, b) => {
-        const aYear = parseInt(`${String(a.SEASON_ID).slice(0, 4)}`, 10) || 0;
-        const bYear = parseInt(`${String(b.SEASON_ID).slice(0, 4)}`, 10) || 0;
-        return bYear - aYear;
-      });
+      const bySeasonDesc = (a, b) =>
+        (parseInt(String(b.SEASON_ID).slice(0, 4), 10) || 0) -
+        (parseInt(String(a.SEASON_ID).slice(0, 4), 10) || 0);
 
-      const recentSeasons = sortedSeasonStats.slice(0, 4);
+      const regularSeasons = parseResultSet('SeasonTotalsRegularSeason').sort(bySeasonDesc).slice(0, 4);
+      const playoffSeasons = parseResultSet('SeasonTotalsPostSeason').sort(bySeasonDesc).slice(0, 4);
 
       return {
         playerId: id,
         playerInfo: infoResponse.data,
         careerStats: careerData,
         seasonStats: {
-          currentSeason: recentSeasons[0] || null,
-          last4Seasons: recentSeasons
+          currentSeason: regularSeasons[0] || null,
+          last4Seasons: regularSeasons,
+          playoffSeasons
         }
       };
     } catch (error) {

@@ -5,6 +5,7 @@ const path = require('path');
 const gamesRoutes = require('./routes/games');
 const teamsRoutes = require('./routes/teams');
 const playersRoutes = require('./routes/players');
+const newsRoutes = require('./routes/news');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,6 +21,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 app.use('/api/games', gamesRoutes);
 app.use('/api/teams', teamsRoutes);
 app.use('/api/players', playersRoutes);
+app.use('/api/news', newsRoutes);
 
 // Serve dashboard at root
 app.get('/', (req, res) => {
