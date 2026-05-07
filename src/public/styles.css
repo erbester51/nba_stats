@@ -860,77 +860,119 @@ button:active {
 
 /* ── News ────────────────────────────────────────── */
 
-.carousel {
-  margin-bottom: 20px;
+/* ── Breaking News Ticker ───────────────────────── */
+
+#breaking-carousel {
+  margin-bottom: 24px;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid rgba(200, 16, 46, 0.35);
 }
 
-.carousel-container {
+.ticker-wrapper {
   display: flex;
-  overflow-x: auto;
-  gap: 12px;
-  padding: 12px 0;
-  scroll-behavior: smooth;
+  align-items: stretch;
+  height: 52px;
 }
 
-.carousel-container::-webkit-scrollbar {
-  height: 5px;
-}
-
-.carousel-container::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.04);
-  border-radius: 10px;
-}
-
-.carousel-container::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.15);
-  border-radius: 10px;
-}
-
-.breaking-news-card {
-  flex: 0 0 100%;
-  min-width: 100%;
-  max-width: 100%;
-  position: relative;
-  display: none;
-  opacity: 0;
-  transition: opacity 0.5s ease;
-}
-
-.breaking-news-card.active {
-  display: block;
-  opacity: 1;
-}
-
-.breaking-badge {
-  display: inline-flex;
+.ticker-label {
+  display: flex;
   align-items: center;
-  gap: 6px;
-  position: absolute;
-  top: 12px;
-  right: 12px;
+  gap: 8px;
   background: var(--accent);
   color: #fff;
-  padding: 4px 12px;
-  border-radius: 4px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 1px;
-  z-index: 10;
+  font-weight: 800;
+  font-size: 0.7rem;
+  letter-spacing: 1.2px;
+  padding: 0 18px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  text-transform: uppercase;
 }
 
-.breaking-badge::before {
-  content: '';
-  width: 6px;
-  height: 6px;
+.ticker-dot {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: #fff;
-  animation: blink 1s ease-in-out infinite;
   flex-shrink: 0;
+  animation: blink 1s ease-in-out infinite;
 }
 
 @keyframes blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.3; }
+}
+
+.ticker-track {
+  overflow: hidden;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  background: rgba(200, 16, 46, 0.06);
+}
+
+.ticker-content {
+  display: inline-flex;
+  align-items: center;
+  white-space: nowrap;
+  animation: ticker-scroll 40s linear infinite;
+  padding-left: 24px;
+}
+
+.ticker-content:hover {
+  animation-play-state: paused;
+}
+
+@keyframes ticker-scroll {
+  0%   { transform: translateX(0); }
+  100% { transform: translateX(-50%); }
+}
+
+.ticker-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 16px;
+  text-decoration: none;
+  color: var(--text);
+  transition: color 0.2s ease;
+  cursor: pointer;
+}
+
+.ticker-item:hover .ticker-headline {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.ticker-source {
+  font-weight: 800;
+  font-size: 0.68rem;
+  color: var(--accent);
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.ticker-headline {
+  font-size: 0.88rem;
+  font-weight: 500;
+  color: var(--text);
+  transition: color 0.2s ease;
+}
+
+.ticker-time {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.ticker-sep {
+  color: var(--accent);
+  opacity: 0.4;
+  font-size: 0.55rem;
+  padding: 0 2px;
+  flex-shrink: 0;
 }
 
 .news-card {
@@ -1015,35 +1057,6 @@ button:active {
   transform: translateX(3px);
 }
 
-#breaking-carousel {
-  background: linear-gradient(135deg, rgba(200, 16, 46, 0.07) 0%, rgba(29, 66, 138, 0.07) 100%);
-  border: 2px solid rgba(200, 16, 46, 0.4);
-  border-radius: 14px;
-  padding: 20px;
-  margin-bottom: 24px;
-  min-height: 180px;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-}
-
-#breaking-carousel .carousel-container {
-  padding: 0;
-  margin: 0;
-}
-
-#breaking-carousel .news-card {
-  border-color: transparent;
-  background: transparent;
-  box-shadow: none;
-}
-
-#breaking-carousel .news-card:hover {
-  background: rgba(255, 255, 255, 0.03);
-  border-color: transparent;
-  box-shadow: none;
-  transform: none;
-}
 
 #news-feed {
   display: grid;
@@ -1052,40 +1065,6 @@ button:active {
   margin-top: 12px;
 }
 
-/* ── Carousel Dots ───────────────────────────────── */
-
-.carousel-dots {
-  display: flex;
-  gap: 6px;
-  justify-content: center;
-  margin-top: 14px;
-}
-
-.carousel-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.2);
-  cursor: pointer;
-  transition: all 0.25s ease;
-  border: none;
-  padding: 0;
-  flex-shrink: 0;
-  min-width: unset;
-  box-shadow: none;
-}
-
-.carousel-dot.active {
-  background: var(--accent);
-  width: 22px;
-  border-radius: 4px;
-}
-
-.carousel-dot:hover:not(.active) {
-  background: rgba(255, 255, 255, 0.4);
-  transform: none;
-  box-shadow: none;
-}
 
 /* ── Team Dashboard Leaders ─────────────────────── */
 

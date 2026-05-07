@@ -574,11 +574,7 @@ async function loadNews() {
     dom.breakingNewsLoading.classList.add('hidden');
     dom.newsLoading.classList.add('hidden');
 
-    if (data.breaking && data.breaking.length > 0) {
-      renderBreakingNews(data.breaking);
-    } else {
-      dom.breakingCarousel.innerHTML = '<p>No breaking news available.</p>';
-    }
+    renderBreakingNewsTicker(data.breaking || []);
 
     if (data.general && data.general.length > 0) {
       renderNewsFeed(data.general);
@@ -593,35 +589,28 @@ async function loadNews() {
   }
 }
 
-function renderBreakingNews(articles) {
-  let html = '';
+function renderBreakingNewsTicker(articles) {
+  if (!articles || !articles.length) {
+    dom.breakingCarousel.innerHTML = '<p style="color:var(--text-muted);font-size:0.9rem;padding:12px 0">No breaking news available.</p>';
+    return;
+  }
 
-  articles.forEach((article, index) => {
-    const date = new Date(article.publishTime).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit'
-    });
+  const itemsHtml = articles.map(article => {
+    const time = new Date(article.publishTime).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+    const safeTitle = article.title.replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return `<a class="ticker-item" href="${article.url}" target="_blank" rel="noopener noreferrer" title="${safeTitle}"><span class="ticker-source">${article.source}</span><span class="ticker-headline">${safeTitle}</span><span class="ticker-time">${time}</span></a><span class="ticker-sep" aria-hidden="true">◆</span>`;
+  }).join('');
 
-    html += `
-      <div class="news-card breaking-news-card">
-        <div class="breaking-badge">BREAKING</div>
-        <div class="news-card-content">
-          <h3>${article.title}</h3>
-          <p>${article.snippet}</p>
-          <div class="news-card-footer">
-            <span class="news-source">${article.source}</span>
-            <span class="news-date">${date}</span>
-          </div>
-          <a href="${article.url}" target="_blank" class="news-link">Read More →</a>
-        </div>
+  const duration = Math.max(30, articles.length * 5);
+
+  dom.breakingCarousel.innerHTML = `
+    <div class="ticker-wrapper">
+      <div class="ticker-label"><span class="ticker-dot"></span>BREAKING</div>
+      <div class="ticker-track">
+        <div class="ticker-content" style="animation-duration:${duration}s">${itemsHtml}${itemsHtml}</div>
       </div>
-    `;
-  });
-
-  dom.breakingCarousel.innerHTML = html ? `<div class="carousel-container">${html}</div>` : '<p>No breaking news.</p>';
-  startCarousel();
+    </div>
+  `;
 }
 
 function renderNewsFeed(articles) {
@@ -651,40 +640,6 @@ function renderNewsFeed(articles) {
   dom.newsFeed.innerHTML = html || '<p>No news available.</p>';
 }
 
-let carouselIndex = 0;
-let carouselInterval = null;
-
-function startCarousel() {
-  const cards = dom.breakingCarousel.querySelectorAll('.breaking-news-card');
-  if (cards.length === 0) return;
-
-  if (cards.length === 1) {
-    cards[0].classList.add('active');
-    return;
-  }
-
-  const dotsEl = document.createElement('div');
-  dotsEl.className = 'carousel-dots';
-  cards.forEach((_, i) => {
-    const dot = document.createElement('button');
-    dot.className = 'carousel-dot' + (i === 0 ? ' active' : '');
-    dot.addEventListener('click', () => goToSlide(i));
-    dotsEl.appendChild(dot);
-  });
-  dom.breakingCarousel.appendChild(dotsEl);
-
-  function goToSlide(index) {
-    carouselIndex = index;
-    cards.forEach((card, i) => card.classList.toggle('active', i === index));
-    dotsEl.querySelectorAll('.carousel-dot').forEach((dot, i) => {
-      dot.classList.toggle('active', i === index);
-    });
-  }
-
-  goToSlide(0);
-  clearInterval(carouselInterval);
-  carouselInterval = setInterval(() => goToSlide((carouselIndex + 1) % cards.length), 5000);
-}
 
 function setBackgroundLogo(logoUrl) {
   let el = document.getElementById('bg-logo');

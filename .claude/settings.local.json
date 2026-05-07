@@ -13,7 +13,10 @@
       "PowerShell($result = Invoke-WebRequest -Uri \"http://localhost:3000/api/teams/2/leaders\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; $result.leaders | Format-List)",
       "PowerShell($data = Invoke-WebRequest -Uri \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/scoreboard\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; $event = $data.events | Select-Object -First 1; $status = $event.status; Write-Output \"state: $\\($status.type.state\\)\"; Write-Output \"description: $\\($status.type.description\\)\"; Write-Output \"detail: $\\($status.type.detail\\)\"; Write-Output \"shortDetail: $\\($status.type.shortDetail\\)\"; Write-Output \"displayClock: $\\($status.displayClock\\)\"; Write-Output \"period: $\\($status.period\\)\"; Write-Output \"clock: $\\($status.clock\\)\")",
       "PowerShell(Get-Process *)",
-      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:3000/api/teams/30/leaders\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; Write-Output \"playoffLeaders is null: $\\($null -eq $r.playoffLeaders\\)\"; $r.regularLeaders.points)"
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:3000/api/teams/30/leaders\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; Write-Output \"playoffLeaders is null: $\\($null -eq $r.playoffLeaders\\)\"; $r.regularLeaders.points)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/news?limit=20\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; $r.articles | Select-Object -First 3 | Format-List headline, description, published, @{N='url';E={$_.links.web.href}}, byline)",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://www.cbssports.com/rss/headlines/nba/\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0'} | Select-Object -ExpandProperty Content; $r.Substring\\(0, 800\\))",
+      "PowerShell($r = Invoke-WebRequest -Uri \"https://www.cbssports.com/rss/headlines/nba/\" -UseBasicParsing -Headers @{'User-Agent'='Mozilla/5.0'} | Select-Object -ExpandProperty Content; [xml]$xml = $r; $xml.rss.channel.item | Select-Object -First 3 | Format-List title, link, pubDate)"
     ]
   }
 }
