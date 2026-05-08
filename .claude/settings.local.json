@@ -20,7 +20,32 @@
       "PowerShell($r = Invoke-WebRequest -Uri \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/2\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; $r.team | Get-Member -MemberType NoteProperty | Select-Object Name)",
       "PowerShell($r = Invoke-WebRequest -Uri \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/2\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; \\($r | ConvertTo-Json -Depth 1\\).Substring\\(0, 500\\))",
       "PowerShell($r = Invoke-WebRequest -Uri \"https://site.api.espn.com/apis/site/v2/sports/basketball/nba/teams/2/injuries\" -UseBasicParsing | Select-Object -ExpandProperty Content; $r.Substring\\(0, 600\\))",
-      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:3000/api/teams/5/injuries\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; Write-Output \"Injuries for Cleveland \\($\\($r.injuries.Count\\) players\\):\"; $r.injuries | Format-Table displayName, position, status, updatedDate)"
+      "PowerShell($r = Invoke-WebRequest -Uri \"http://localhost:3000/api/teams/5/injuries\" -UseBasicParsing | Select-Object -ExpandProperty Content | ConvertFrom-Json; Write-Output \"Injuries for Cleveland \\($\\($r.injuries.Count\\) players\\):\"; $r.injuries | Format-Table displayName, position, status, updatedDate)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000)",
+      "Bash(node *)",
+      "Bash(curl -s http://localhost:3000/api/games/upcoming?days=3)",
+      "Bash(Get-Process node *)",
+      "Bash(Select-Object Id, ProcessName, CommandLine)",
+      "Bash(tasklist)",
+      "Bash(findstr /i node)",
+      "Bash(netstat -ano)",
+      "Bash(kill 4648)",
+      "Bash(kill 12584)",
+      "Bash(curl -s \"http://localhost:3000/api/games/upcoming?days=3\")",
+      "Bash(awk '{print $5}')",
+      "Bash(cmd /c \"for /f \\\\\"tokens=5\\\\\" %a in \\('netstat -ano ^| findstr :3000'\\) do taskkill /F /PID %a\")",
+      "Bash(cmd /c \"taskkill /F /PID 4648\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/upcoming?days=2\")",
+      "Bash(cmd /c \"taskkill /F /IM node.exe\")",
+      "Bash(cmd /c \"taskkill /F /PID 4648 /PID 12584\")",
+      "Bash(kill -9 4648)",
+      "Bash(kill -9 12584)",
+      "Bash(cmd *)",
+      "PowerShell(Stop-Process *)",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871161/scouting\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871161/scouting\" -o /tmp/scouting.json)",
+      "PowerShell(Get-NetTCPConnection *)",
+      "Bash(npx *)"
     ]
   }
 }

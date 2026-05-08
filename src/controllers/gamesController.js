@@ -39,6 +39,28 @@ exports.getGamePlayers = async (req, res) => {
   }
 };
 
+exports.getUpcomingGames = async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days) || 7, 14);
+    const games = await nbaService.getUpcomingGames(days);
+    res.json({ count: games.length, games });
+  } catch (error) {
+    console.error('Controller error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getScoutingReport = async (req, res) => {
+  try {
+    const { gameId } = req.params;
+    const report = await nbaService.getScoutingReport(gameId);
+    res.json(report);
+  } catch (error) {
+    console.error('Controller error:', error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 exports.getGameDetails = async (req, res) => {
   try {
     const { gameId } = req.params;

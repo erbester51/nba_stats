@@ -19,6 +19,11 @@ const dom = {
   playerSeason: document.getElementById('player-season'),
   playerSeasonStats: document.getElementById('player-season-stats'),
   playerGameLog: document.getElementById('player-game-log'),
+  scoutingGameSelect: document.getElementById('scouting-game-select'),
+  scoutingFetchBtn: document.getElementById('scouting-fetch-btn'),
+  scoutingLoading: document.getElementById('scouting-loading'),
+  scoutingError: document.getElementById('scouting-error'),
+  scoutingContent: document.getElementById('scouting-content'),
 };
 
 const state = {
@@ -433,11 +438,11 @@ async function showTeamStats(teamId) {
             </div>
           `).join('')}
         </div>
+        ${renderInjuryReport(injuryData)}
         ${leadersData ? [
           renderSeasonLeadersGrid(leadersData.playoffLeaders, '2025-26 Playoff Leaders', 'playoffs'),
           renderSeasonLeadersGrid(leadersData.regularLeaders, '2025-26 Regular Season Leaders', 'regular')
         ].join('') : ''}
-        ${renderInjuryReport(injuryData)}
       </div>
     `;
   } catch (error) {
@@ -445,14 +450,28 @@ async function showTeamStats(teamId) {
   }
 }
 
+function setPlayerHeadshot(playerId) {
+  const el = document.getElementById('player-headshot');
+  if (!el) return;
+  if (!playerId) {
+    el.classList.add('hidden');
+    el.src = '';
+    return;
+  }
+  el.src = `https://cdn.nba.com/headshots/nba/latest/1040x760/${playerId}.png`;
+  el.classList.remove('hidden');
+}
+
 function renderPlayerStats(data) {
   if (data.error) {
+    setPlayerHeadshot(null);
     dom.playerInfo.innerHTML = `<div class="card"><p>${data.error}</p></div>`;
     dom.playerSeasonSelect.classList.add('hidden');
     dom.playerSeasonStats.innerHTML = '';
     dom.playerGameLog.innerHTML = '';
     return;
   }
+  setPlayerHeadshot(data.playerId);
 
   const playerName = data.playerInfo?.resultSets?.[0]?.rowSet?.[0]?.[3] || data.playerInfo?.resultSets?.[0]?.rowSet?.[0]?.[1] || 'Player';
   const currentSeason = data.seasonStats?.currentSeason;
@@ -801,6 +820,135 @@ function animateStatValues(container) {
 }
 
 
+async function loadScoutingGames() {
+  dom.scoutingGameSelect.innerHTML = '<option value="">Loading games...</option>';
+  try {
+    const data = await fetchJson(`${apiBase}/games/upcoming?days=14`);
+    const games = data.games || [];
+    if (!games.length) {
+      dom.scoutingGameSelect.innerHTML = '<option value="">No upcoming games found</option>';
+      return;
+    }
+
+    let byDate = {};
+    games.forEach(game => {
+      const d = new Date(game.date);
+      const key = d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+      if (!byDate[key]) byDate[key] = [];
+      byDate[key].push(game);
+    });
+
+    let html = '<option value="">Select a matchup...</option>';
+    Object.entries(byDate).forEach(([dateLabel, dayGames]) => {
+      html += `<optgroup label="${dateLabel}">`;
+      dayGames.forEach(game => {
+        const time = new Date(game.date).toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const statusSuffix = game.statusState === 'in' ? ' (LIVE)' : game.statusState === 'post' ? ' (Final)' : ` ${time}`;
+        html += `<option value="${game.gameId}">${game.awayTeam} @ ${game.homeTeam}${statusSuffix}</option>`;
+      });
+      html += '</optgroup>';
+    });
+    dom.scoutingGameSelect.innerHTML = html;
+  } catch (error) {
+    dom.scoutingGameSelect.innerHTML = '<option value="">Failed to load games</option>';
+  }
+}
+
+async function fetchScoutingReport() {
+  const gameId = dom.scoutingGameSelect.value;
+  if (!gameId) return;
+
+  dom.scoutingLoading.classList.remove('hidden');
+  dom.scoutingError.classList.add('hidden');
+  dom.scoutingContent.innerHTML = '';
+
+  try {
+    const report = await fetchJson(`${apiBase}/games/${gameId}/scouting`);
+    dom.scoutingLoading.classList.add('hidden');
+    renderScoutingReport(report);
+  } catch (error) {
+    dom.scoutingLoading.classList.add('hidden');
+    dom.scoutingError.textContent = `Error loading scouting report: ${error.message}`;
+    dom.scoutingError.classList.remove('hidden');
+  }
+}
+
+function renderScoutingReport(report) {
+  const formatArticles = (articles) => `
+    <div class="scouting-articles">
+      ${articles.slice(0, 6).map(article => {
+        const date = new Date(article.publishTime).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        const title = article.title.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+        const snippet = (article.snippet || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        return `
+          <a class="scouting-article-card" href="${article.url}" target="_blank" rel="noopener noreferrer">
+            <div class="scouting-article-meta">
+              <span class="news-source">${article.source}</span>
+              <span class="news-date">${date}</span>
+            </div>
+            <p class="scouting-article-title">${title}</p>
+            ${snippet ? `<p class="scouting-article-blurb">${snippet}</p>` : ''}
+          </a>
+        `;
+      }).join('')}
+    </div>
+  `;
+
+  const sections = report.sections || [];
+  const advancedSources = report.advancedSources || [];
+  const gameDateStr = report.gameDate
+    ? new Date(report.gameDate).toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })
+    : '';
+
+  const matchupHeader = `
+    <div class="scouting-matchup-header">
+      <span class="scouting-team">${report.awayTeam.name}</span>
+      <span class="scouting-at">@</span>
+      <span class="scouting-team">${report.homeTeam.name}</span>
+      ${gameDateStr ? `<span class="scouting-cache-badge">${gameDateStr}</span>` : ''}
+    </div>
+  `;
+
+  const sectionsHtml = sections.length ? sections.map((section, i) => `
+    ${i > 0 ? '<div style="border-top: 1px solid var(--border); margin: 8px 0;"></div>' : ''}
+    <div class="scouting-section">
+      <div class="scouting-section-header">
+        <h3>${section.title}</h3>
+        <span class="scouting-article-count">${section.articles.length} article${section.articles.length !== 1 ? 's' : ''}</span>
+      </div>
+      ${formatArticles(section.articles)}
+    </div>
+  `).join('') : `<p class="scouting-empty">No game-specific scouting articles found for this matchup yet. Check back closer to game time.</p>`;
+
+  const advancedHtml = advancedSources.length ? `
+    <div style="border-top: 1px solid var(--border); margin: 24px 0 8px;"></div>
+    <div class="scouting-section">
+      <div class="scouting-section-header">
+        <h3>Advanced Scouting Data</h3>
+      </div>
+      <div class="scouting-advanced-grid">
+        ${advancedSources.map(src => `
+          <div class="scouting-advanced-card">
+            <div class="scouting-advanced-name">${src.name}</div>
+            <p class="scouting-advanced-desc">${src.description}</p>
+            <div class="scouting-advanced-links">
+              ${src.links.map(link => `<a class="scouting-advanced-link" href="${link.url}" target="_blank" rel="noopener noreferrer">${link.label} →</a>`).join('')}
+            </div>
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  ` : '';
+
+  dom.scoutingContent.innerHTML = `
+    <div class="card card-animate">
+      ${matchupHeader}
+      ${sectionsHtml}
+      ${advancedHtml}
+    </div>
+  `;
+}
+
 function handleTabClick(event) {
   const tabName = event.target.dataset.tab;
   if (!tabName) return;
@@ -846,7 +994,12 @@ async function init() {
     }
   });
   dom.playerSeason.addEventListener('change', renderSelectedSeason);
-  await Promise.all([loadGames(), loadTeams(), loadPlayers(), loadNews()]);
+  dom.scoutingFetchBtn.addEventListener('click', fetchScoutingReport);
+  dom.scoutingGameSelect.addEventListener('change', () => {
+    dom.scoutingContent.innerHTML = '';
+    dom.scoutingError.classList.add('hidden');
+  });
+  await Promise.all([loadGames(), loadTeams(), loadPlayers(), loadNews(), loadScoutingGames()]);
 }
 
 window.addEventListener('DOMContentLoaded', init);

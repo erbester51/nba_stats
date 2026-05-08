@@ -1,4 +1,5 @@
 const axios = require('axios');
+const cheerio = require('cheerio');
 
 const ESPN_BASE = 'https://site.api.espn.com/apis/site/v2/sports/basketball/nba';
 const NBA_STATS_API = 'https://stats.nba.com/stats';
@@ -948,6 +949,337 @@ class NBAService {
       console.error('Error fetching team stats:', error.message);
       throw new Error(`Failed to fetch team stats: ${error.message}`);
     }
+  }
+
+  async getUpcomingGames(days = 7) {
+    const dateStrings = [];
+    const today = new Date();
+    for (let i = 0; i < days; i++) {
+      const d = new Date(today);
+      d.setDate(today.getDate() + i);
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      dateStrings.push(`${year}${month}${day}`);
+    }
+
+    const results = await Promise.allSettled(
+      dateStrings.map(ds => this.client.get(`${ESPN_BASE}/scoreboard?dates=${ds}`))
+    );
+
+    const games = [];
+    results.forEach(result => {
+      if (result.status !== 'fulfilled') return;
+      const events = result.value.data.events || [];
+      events.forEach(event => {
+        const competition = event.competitions?.[0];
+        if (!competition?.competitors?.length) return;
+        const home = competition.competitors.find(c => c.homeAway === 'home');
+        const away = competition.competitors.find(c => c.homeAway === 'away');
+        if (!home || !away) return;
+        games.push({
+          gameId: event.id,
+          date: event.date,
+          status: event.status?.type?.description || 'Unknown',
+          statusState: event.status?.type?.state || 'pre',
+          homeTeam: home.team?.displayName || home.team?.name || 'Unknown',
+          homeTeamId: home.team?.id || null,
+          awayTeam: away.team?.displayName || away.team?.name || 'Unknown',
+          awayTeamId: away.team?.id || null,
+          venue: competition.venue?.fullName || 'TBD'
+        });
+      });
+    });
+
+    return games.sort((a, b) => new Date(a.date) - new Date(b.date));
+  }
+
+  async getTeamNews(teamId) {
+    try {
+      const response = await this.client.get(`${ESPN_BASE}/news`, {
+        params: { teams: teamId, limit: 25 }
+      });
+      return (response.data.articles || [])
+        .filter(a => a.headline && a.links?.web?.href && a.type !== 'Media')
+        .map(a => ({
+          title: a.headline.trim(),
+          snippet: (a.description || '').trim().substring(0, 400),
+          url: a.links.web.href,
+          source: 'ESPN',
+          publishTime: new Date(a.published || Date.now())
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  async fetchCBSSportsScoutingNews() {
+    try {
+      const response = await axios.get('https://www.cbssports.com/rss/headlines/nba/', {
+        responseType: 'text',
+        timeout: 8000,
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html,application/xml,*/*' }
+      });
+      const $ = cheerio.load(response.data, { xmlMode: true });
+      const articles = [];
+      $('item').each((i, el) => {
+        if (articles.length >= 25) return;
+        const title = $(el).find('title').text().trim();
+        const url = $(el).find('link').text().trim();
+        const pubDate = $(el).find('pubDate').text().trim();
+        const snippet = $(el).find('description').text().replace(/<[^>]+>/g, '').trim();
+        if (title && url) {
+          articles.push({
+            title,
+            snippet: snippet.substring(0, 400),
+            url,
+            source: 'CBS Sports',
+            publishTime: pubDate ? new Date(pubDate) : new Date()
+          });
+        }
+      });
+      return articles;
+    } catch {
+      return [];
+    }
+  }
+
+  async fetchRSSFeed(url, source) {
+    try {
+      const response = await axios.get(url, {
+        responseType: 'text',
+        timeout: 8000,
+        headers: { 'User-Agent': 'Mozilla/5.0', 'Accept': 'text/html,application/xml,*/*' }
+      });
+      const $ = cheerio.load(response.data, { xmlMode: true });
+      const articles = [];
+      $('item').each((i, el) => {
+        if (articles.length >= 25) return;
+        const title = $(el).find('title').text().trim();
+        const link = $(el).find('link').text().trim() || $(el).find('guid').text().trim();
+        const pubDate = $(el).find('pubDate').text().trim();
+        const snippet = $(el).find('description').text().replace(/<[^>]+>/g, '').trim();
+        if (title && link) {
+          articles.push({
+            title,
+            snippet: snippet.substring(0, 400),
+            url: link,
+            source,
+            publishTime: pubDate ? new Date(pubDate) : new Date()
+          });
+        }
+      });
+      return articles;
+    } catch {
+      return [];
+    }
+  }
+
+  async fetchNBAOfficialNews() {
+    return this.fetchRSSFeed('https://www.nba.com/news/rss.xml', 'NBA.com');
+  }
+
+  async fetchYahooSportsNews() {
+    return this.fetchRSSFeed('https://sports.yahoo.com/nba/rss.xml', 'Yahoo Sports');
+  }
+
+  async fetchSportsIllustratedNews() {
+    return this.fetchRSSFeed('https://www.si.com/nba/feed/rss', 'Sports Illustrated');
+  }
+
+  async getScoutingReport(gameId) {
+    const summaryRes = await this.client.get(`${ESPN_BASE}/summary?event=${gameId}`);
+    const summary = summaryRes.data;
+
+    const headerComp = summary.header?.competitions?.[0];
+    if (!headerComp?.competitors) throw new Error('Could not determine teams for game');
+
+    const homeComp = headerComp.competitors.find(c => c.homeAway === 'home');
+    const awayComp = headerComp.competitors.find(c => c.homeAway === 'away');
+    const homeTeamId = homeComp?.team?.id || homeComp?.id;
+    const awayTeamId = awayComp?.team?.id || awayComp?.id;
+    const homeTeamName = homeComp?.team?.displayName || homeComp?.team?.name || 'Home Team';
+    const awayTeamName = awayComp?.team?.displayName || awayComp?.team?.name || 'Away Team';
+
+    if (!homeTeamId || !awayTeamId) throw new Error('Could not determine teams for game');
+
+    console.log(`[Scouting] Game ${gameId}: ${awayTeamName} @ ${homeTeamName} (IDs: ${awayTeamId} @ ${homeTeamId})`);
+
+    // Articles embedded in the ESPN game summary itself
+    const rawSummaryNews = Array.isArray(summary.news) ? summary.news : [];
+    const summaryArticles = rawSummaryNews
+      .filter(a => a.headline && a.links?.web?.href && a.type !== 'Media')
+      .map(a => ({
+        title: a.headline.trim(),
+        snippet: (a.description || '').trim().substring(0, 400),
+        url: a.links.web.href,
+        source: 'ESPN',
+        publishTime: new Date(a.published || Date.now())
+      }));
+
+    const [homeNews, awayNews, combinedNews, cbsArticles, nbaArticles, yahooArticles, siArticles] = await Promise.allSettled([
+      this.getTeamNews(homeTeamId),
+      this.getTeamNews(awayTeamId),
+      this.getTeamNews(`${homeTeamId},${awayTeamId}`),
+      this.fetchCBSSportsScoutingNews(),
+      this.fetchNBAOfficialNews(),
+      this.fetchYahooSportsNews(),
+      this.fetchSportsIllustratedNews()
+    ]);
+
+    const homeNewsArr = homeNews.status      === 'fulfilled' ? homeNews.value      : [];
+    const awayNewsArr = awayNews.status      === 'fulfilled' ? awayNews.value      : [];
+    const combinedArr = combinedNews.status  === 'fulfilled' ? combinedNews.value  : [];
+    const cbsArr      = cbsArticles.status   === 'fulfilled' ? cbsArticles.value   : [];
+    const nbaArr      = nbaArticles.status   === 'fulfilled' ? nbaArticles.value   : [];
+    const yahooArr    = yahooArticles.status === 'fulfilled' ? yahooArticles.value  : [];
+    const siArr       = siArticles.status    === 'fulfilled' ? siArticles.value    : [];
+
+    console.log(`[Scouting] Fetched — home:${homeNewsArr.length} away:${awayNewsArr.length} combined:${combinedArr.length} cbs:${cbsArr.length} nba:${nbaArr.length} yahoo:${yahooArr.length} si:${siArr.length} summary:${summaryArticles.length}`);
+
+    // Articles that appear in BOTH individual team feeds are matchup-specific by definition
+    const awayUrlSet = new Set(awayNewsArr.map(a => a.url));
+    const crossArticles = homeNewsArr.filter(a => awayUrlSet.has(a.url));
+    const crossUrlSet = new Set(crossArticles.map(a => a.url));
+    const summaryUrlSet = new Set(summaryArticles.map(a => a.url));
+
+    console.log(`[Scouting] Cross-feed articles (in both team feeds): ${crossArticles.length}`);
+
+    // Combine: priority order so dedup keeps matchup-specific articles first
+    const allArticles = [
+      ...summaryArticles,
+      ...crossArticles,
+      ...combinedArr,
+      ...cbsArr,
+      ...nbaArr,
+      ...yahooArr,
+      ...siArr,
+      ...homeNewsArr,
+      ...awayNewsArr
+    ];
+
+    const seen = new Set();
+    const unique = allArticles.filter(a => {
+      if (seen.has(a.url)) return false;
+      seen.add(a.url);
+      return true;
+    });
+
+    console.log(`[Scouting] After dedup: ${unique.length} total articles`);
+
+    const buildTokens = (displayName) => {
+      const parts = displayName.trim().split(' ');
+      const tokens = [displayName.toLowerCase()];
+      tokens.push(parts[parts.length - 1].toLowerCase());
+      if (parts.length === 2) {
+        tokens.push(parts[0].toLowerCase());
+      } else if (parts.length >= 3) {
+        tokens.push(parts.slice(0, -1).join(' ').toLowerCase());
+      }
+      return tokens;
+    };
+
+    const homeTokens = buildTokens(homeTeamName);
+    const awayTokens = buildTokens(awayTeamName);
+
+    console.log(`[Scouting] Home tokens: ${JSON.stringify(homeTokens)}`);
+    console.log(`[Scouting] Away tokens: ${JSON.stringify(awayTokens)}`);
+
+    const hasToken   = (text, tokens)   => tokens.some(t => text.includes(t));
+    const hasKeyword = (text, keywords) => keywords.some(k => text.includes(k));
+
+    const mentionsHome = unique.filter(a => hasToken(`${a.title} ${a.snippet}`.toLowerCase(), homeTokens)).length;
+    const mentionsAway = unique.filter(a => hasToken(`${a.title} ${a.snippet}`.toLowerCase(), awayTokens)).length;
+    console.log(`[Scouting] Mention home team: ${mentionsHome}  |  Mention away team: ${mentionsAway}`);
+
+    const EXCLUDE = ['injury', 'injured', 'out for', 'day-to-day', 'trade', 'signing', 'waived', 'rumors'];
+
+    const filtered = unique.filter(article => {
+      const text = `${article.title} ${article.snippet}`.toLowerCase();
+      if (EXCLUDE.some(k => text.includes(k))) return false;
+      // Cross-feed and summary articles are inherently about this matchup
+      if (crossUrlSet.has(article.url) || summaryUrlSet.has(article.url)) return true;
+      // All other sources must explicitly name both teams
+      return hasToken(text, homeTokens) && hasToken(text, awayTokens);
+    });
+
+    console.log(`[Scouting] After matchup + exclude filter: ${filtered.length} articles`);
+
+    if (filtered.length === 0) {
+      console.log('[Scouting] No articles passed. Sample titles from unique pool:');
+      unique.slice(0, 10).forEach(a => console.log(`  [${a.source}] "${a.title}"`));
+    }
+
+    const SECTIONS = [
+      {
+        title: 'Game Preview & Series Context',
+        keywords: ['preview', 'series', 'playoff', 'game 2', 'game 3', 'game 4', 'game 5', 'game 6', 'game 7', 'matchup', 'semifinal', 'finals', 'first round', 'second round', 'conference']
+      },
+      {
+        title: 'Key Matchups & Scheme Breakdown',
+        keywords: ['defense', 'offense', 'scheme', 'strategy', 'guard', 'switch', 'zone', 'paint', 'coaching', 'lineup', 'rotation', 'perimeter', 'post']
+      },
+      {
+        title: 'What to Watch',
+        keywords: ['x-factor', 'storyline', 'key', 'watch', 'adjustments', 'momentum', 'focus', 'spotlight', 'factor', 'impact']
+      },
+      {
+        title: 'Analyst Predictions',
+        keywords: ['prediction', 'pick', 'winner', 'advantage', 'edge', 'will win', 'expect', 'forecast', 'odds', 'favor', 'projected', 'analysis']
+      }
+    ];
+
+    const sections = SECTIONS.map(s => ({
+      title: s.title,
+      articles: filtered.filter(article => {
+        const text = `${article.title} ${article.snippet}`.toLowerCase();
+        return hasKeyword(text, s.keywords);
+      })
+    })).filter(s => s.articles.length > 0);
+
+    console.log(`[Scouting] Sections populated: ${sections.map(s => `"${s.title}" (${s.articles.length})`).join(', ') || 'none'}`);
+
+    const espnAbbrToNba = { GS: 'GSW', NY: 'NYK', NO: 'NOP', SA: 'SAS', UTAH: 'UTA', WSH: 'WAS' };
+    const toNbaAbbr = abbr => (espnAbbrToNba[abbr] || abbr).toLowerCase();
+    const homeAbbr = toNbaAbbr(homeComp?.team?.abbreviation || '');
+    const awayAbbr = toNbaAbbr(awayComp?.team?.abbreviation || '');
+
+    const advancedSources = [
+      {
+        name: 'Cleaning the Glass',
+        description: 'Shot quality-adjusted efficiency broken down by zone, play type, lineup, and defensive context — the gold standard for measuring true shooting value.',
+        links: [
+          { label: homeTeamName, url: `https://cleaningtheglass.com/stats/team/${homeAbbr}` },
+          { label: awayTeamName, url: `https://cleaningtheglass.com/stats/team/${awayAbbr}` }
+        ]
+      },
+      {
+        name: 'BBall Index',
+        description: 'DARKO projections, PIPM defensive impact grades, and lineup-level on/off splits for deep matchup and roster analysis.',
+        links: [
+          { label: 'Team On/Off Splits', url: 'https://www.bball-index.com/nba-team-on-off/' },
+          { label: 'Player Defense Ratings', url: 'https://www.bball-index.com/player-defense/' }
+        ]
+      },
+      {
+        name: 'PBP Stats',
+        description: 'Play-by-play derived stats: transition frequency, second-chance rates, shot type distribution, foul drawing, and clutch performance by team.',
+        links: [
+          { label: homeTeamName, url: 'https://www.pbpstats.com/team-stats/nba/team?Season=2025-26&SeasonType=Playoffs' },
+          { label: awayTeamName, url: 'https://www.pbpstats.com/team-stats/nba/team?Season=2025-26&SeasonType=Playoffs' }
+        ]
+      }
+    ];
+
+    return {
+      gameId,
+      gameDate: headerComp.date || null,
+      homeTeam: { id: homeTeamId, name: homeTeamName },
+      awayTeam: { id: awayTeamId, name: awayTeamName },
+      totalMatches: filtered.length,
+      sections,
+      advancedSources
+    };
   }
 
   /**

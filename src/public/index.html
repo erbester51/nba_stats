@@ -29,6 +29,7 @@
       <button class="tab-button active" data-tab="games">Today</button>
       <button class="tab-button" data-tab="team">Team</button>
       <button class="tab-button" data-tab="player">Player</button>
+      <button class="tab-button" data-tab="scouting">Scouting</button>
     </section>
 
     <section id="games" class="tab-panel active">
@@ -71,13 +72,20 @@
         <h2>Player Stats</h2>
         <p>Select a player from the list or search by name or NBA player ID.</p>
       </div>
-      <div class="form-row">
-        <label for="player-select">Player</label>
-        <select id="player-select"><option value="">Loading players...</option></select>
-      </div>
-      <div class="form-row">
-        <input id="player-input" type="text" placeholder="Stephen Curry or 201939" />
-        <button id="player-search">Search</button>
+      <div class="player-search-layout">
+        <div class="player-search-controls">
+          <div class="form-row">
+            <label for="player-select">Player</label>
+            <select id="player-select"><option value="">Loading players...</option></select>
+          </div>
+          <div class="form-row">
+            <input id="player-input" type="text" placeholder="Stephen Curry or 201939" />
+            <button id="player-search">Search</button>
+          </div>
+        </div>
+        <div class="player-photo-area">
+          <img id="player-headshot" class="player-headshot hidden" src="" alt="Player" />
+        </div>
       </div>
       <div id="player-info" class="card"></div>
       <div id="player-season-select" class="form-row hidden">
@@ -86,6 +94,21 @@
       </div>
       <div id="player-season-stats" class="card"></div>
       <div id="player-game-log" class="card"></div>
+    </section>
+
+    <section id="scouting" class="tab-panel">
+      <div class="section-header">
+        <h2>Scouting Reports</h2>
+        <p>Game-specific previews, matchup breakdowns, and analyst predictions for the selected game.</p>
+      </div>
+      <div class="form-row">
+        <label for="scouting-game-select">Matchup</label>
+        <select id="scouting-game-select"><option value="">Loading games...</option></select>
+        <button id="scouting-fetch-btn">Get Reports</button>
+      </div>
+      <div id="scouting-loading" class="loader hidden">Fetching scouting reports...</div>
+      <div id="scouting-error" class="scouting-error-notice hidden"></div>
+      <div id="scouting-content"></div>
     </section>
 
   </main>
