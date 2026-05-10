@@ -30,6 +30,7 @@
       <button class="tab-button" data-tab="team">Team</button>
       <button class="tab-button" data-tab="player">Player</button>
       <button class="tab-button" data-tab="scouting">Scouting</button>
+      <button class="tab-button" data-tab="betting">Bet Analysis</button>
     </section>
 
     <section id="games" class="tab-panel active">
@@ -109,6 +110,21 @@
       <div id="scouting-loading" class="loader hidden">Fetching scouting reports...</div>
       <div id="scouting-error" class="scouting-error-notice hidden"></div>
       <div id="scouting-content"></div>
+    </section>
+
+    <section id="betting" class="tab-panel">
+      <div class="section-header">
+        <h2>Bet Analysis</h2>
+        <p>Live Kalshi prediction market lines compared against player stats to rate each prop bet.</p>
+      </div>
+      <div class="form-row">
+        <label for="betting-game-select">Matchup</label>
+        <select id="betting-game-select"><option value="">Loading games...</option></select>
+        <button id="betting-fetch-btn">Analyze Bets</button>
+      </div>
+      <div id="betting-loading" class="loader hidden">Fetching Kalshi markets and player stats&hellip;</div>
+      <div id="betting-error" class="scouting-error-notice hidden"></div>
+      <div id="betting-content"></div>
     </section>
 
   </main>

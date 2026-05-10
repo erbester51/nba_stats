@@ -8,6 +8,7 @@ class NBAService {
   constructor() {
     // Set up axios instance with proper headers to avoid 401 errors
     this.client = axios.create({
+      timeout: 15000,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json, text/plain, */*',
@@ -114,8 +115,23 @@ class NBAService {
       const response = await this.client.get(`${ESPN_BASE}/summary?event=${gameId}`);
       const summary = response.data;
       const boxscore = summary.boxscore;
+
+      // For pre-game (no boxscore yet), extract teams from the event header
       if (!boxscore || !boxscore.players) {
-        return { gameId, players: [], teams: [], summary: summary || {} };
+        const headerComp = summary.header?.competitions?.[0];
+        const gameDate   = headerComp?.date || summary.date || null;
+        const teams      = [];
+        if (headerComp?.competitors) {
+          for (const comp of headerComp.competitors) {
+            teams.push({
+              teamId:       comp.team?.id || comp.id || null,
+              teamName:     comp.team?.displayName || comp.team?.name || null,
+              abbreviation: comp.team?.abbreviation || null,
+              homeAway:     comp.homeAway || null,
+            });
+          }
+        }
+        return { gameId, gameDate, players: [], teams };
       }
 
       const teams = boxscore.teams.map(team => ({

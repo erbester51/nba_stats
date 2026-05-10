@@ -62,7 +62,10 @@
       "Bash(curl -s \"http://localhost:5173/api/players/Stephen%20Curry/stats\")",
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('playerId:', d.get\\('playerId'\\), '| error:', d.get\\('error'\\)\\)\")",
       "Bash(curl -s \"http://localhost:5173/api/games/upcoming?days=14\")",
-      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('upcoming games:', len\\(d.get\\('games',[]\\)\\)\\)\")"
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('upcoming games:', len\\(d.get\\('games',[]\\)\\)\\)\")",
+      "Bash(taskkill /F /IM node.exe)",
+      "PowerShell(Invoke-RestMethod \"http://localhost:3000/api/health\")",
+      "PowerShell($proc = Start-Process -FilePath \"node\" -ArgumentList \"src/index.js\" -WorkingDirectory \"C:\\\\Users\\\\erbes\\\\projects\\\\nba_stats\" -PassThru -WindowStyle Hidden; Start-Sleep -Seconds 3; $proc.Id)"
     ]
   }
 }
