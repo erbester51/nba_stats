@@ -45,7 +45,24 @@
       "Bash(curl -s \"http://localhost:3000/api/games/401871161/scouting\")",
       "Bash(curl -s \"http://localhost:3000/api/games/401871161/scouting\" -o /tmp/scouting.json)",
       "PowerShell(Get-NetTCPConnection *)",
-      "Bash(npx *)"
+      "Bash(npx *)",
+      "Bash(Copy-Item *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:5173/)",
+      "Bash(curl -s http://localhost:5173/api/health)",
+      "Bash(curl -s \"http://localhost:5173/api/games/scores?includeLeaders=1\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('scores count:', len\\(d.get\\('scores',[]\\)\\), '| keys:', list\\(d.keys\\(\\)\\)\\)\")",
+      "Bash(curl -s \"http://localhost:5173/api/news\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('breaking:', len\\(d.get\\('breaking',[]\\)\\), '| general:', len\\(d.get\\('general',[]\\)\\)\\)\")",
+      "Bash(curl -s \"http://localhost:5173/api/teams\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('teams:', len\\(d.get\\('teams',[]\\)\\)\\)\")",
+      "Bash(curl -s \"http://localhost:5173/api/players/list\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('players:', len\\(d.get\\('players',[]\\)\\)\\)\")",
+      "Bash(curl -s \"http://localhost:5173/api/players/Stephen%20Curry/stats\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('playerId:', d.get\\('playerId'\\), '| error:', d.get\\('error'\\)\\)\")",
+      "Bash(curl -s \"http://localhost:5173/api/games/upcoming?days=14\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('upcoming games:', len\\(d.get\\('games',[]\\)\\)\\)\")"
     ]
   }
 }

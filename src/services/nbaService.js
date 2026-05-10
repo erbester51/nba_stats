@@ -1096,10 +1096,14 @@ class NBAService {
 
     const homeComp = headerComp.competitors.find(c => c.homeAway === 'home');
     const awayComp = headerComp.competitors.find(c => c.homeAway === 'away');
-    const homeTeamId = homeComp?.team?.id || homeComp?.id;
-    const awayTeamId = awayComp?.team?.id || awayComp?.id;
+    const homeTeamId   = homeComp?.team?.id   || homeComp?.id;
+    const awayTeamId   = awayComp?.team?.id   || awayComp?.id;
     const homeTeamName = homeComp?.team?.displayName || homeComp?.team?.name || 'Home Team';
     const awayTeamName = awayComp?.team?.displayName || awayComp?.team?.name || 'Away Team';
+    // ESPN's `location` field gives the true city name (e.g. "Portland" for the Trail Blazers)
+    // which avoids generating bogus tokens like "Portland Trail" via mechanical slicing
+    const homeLocation = homeComp?.team?.location || null;
+    const awayLocation = awayComp?.team?.location || null;
 
     if (!homeTeamId || !awayTeamId) throw new Error('Could not determine teams for game');
 
@@ -1137,18 +1141,9 @@ class NBAService {
 
     console.log(`[Scouting] Fetched — home:${homeNewsArr.length} away:${awayNewsArr.length} combined:${combinedArr.length} cbs:${cbsArr.length} nba:${nbaArr.length} yahoo:${yahooArr.length} si:${siArr.length} summary:${summaryArticles.length}`);
 
-    // Articles that appear in BOTH individual team feeds are matchup-specific by definition
-    const awayUrlSet = new Set(awayNewsArr.map(a => a.url));
-    const crossArticles = homeNewsArr.filter(a => awayUrlSet.has(a.url));
-    const crossUrlSet = new Set(crossArticles.map(a => a.url));
-    const summaryUrlSet = new Set(summaryArticles.map(a => a.url));
-
-    console.log(`[Scouting] Cross-feed articles (in both team feeds): ${crossArticles.length}`);
-
-    // Combine: priority order so dedup keeps matchup-specific articles first
+    // Deduplicate by URL across all sources
     const allArticles = [
       ...summaryArticles,
-      ...crossArticles,
       ...combinedArr,
       ...cbsArr,
       ...nbaArr,
@@ -1167,48 +1162,80 @@ class NBAService {
 
     console.log(`[Scouting] After dedup: ${unique.length} total articles`);
 
-    const buildTokens = (displayName) => {
-      const parts = displayName.trim().split(' ');
-      const tokens = [displayName.toLowerCase()];
-      tokens.push(parts[parts.length - 1].toLowerCase());
-      if (parts.length === 2) {
-        tokens.push(parts[0].toLowerCase());
-      } else if (parts.length >= 3) {
-        tokens.push(parts.slice(0, -1).join(' ').toLowerCase());
-      }
-      return tokens;
+    // ── Team token sets ──────────────────────────────────────────────────────
+    const TEAM_NICKNAMES = {
+      timberwolves: ['wolves', 'twolves'],
+      mavericks:    ['mavs'],
+      warriors:     ['dubs'],
+      cavaliers:    ['cavs'],
+      '76ers':      ['sixers', 'philly'],
+      blazers:      ['trail blazers'],
+      pelicans:     ['pels'],
+      clippers:     ['clips'],
+      thunder:      ['okc'],
     };
 
-    const homeTokens = buildTokens(homeTeamName);
-    const awayTokens = buildTokens(awayTeamName);
+    const buildTokens = (displayName, location) => {
+      const parts    = displayName.trim().split(' ');
+      const nickname = parts[parts.length - 1].toLowerCase();
+      const tokens   = new Set();
+      tokens.add(displayName.toLowerCase());
+      tokens.add(nickname);
+      if (location) {
+        tokens.add(location.trim().toLowerCase());
+      } else if (parts.length === 2) {
+        tokens.add(parts[0].toLowerCase());
+      } else if (parts.length >= 3) {
+        tokens.add(parts.slice(0, -1).join(' ').toLowerCase());
+      }
+      (TEAM_NICKNAMES[nickname] || []).forEach(alias => tokens.add(alias));
+      return [...tokens];
+    };
+
+    const homeTokens = buildTokens(homeTeamName, homeLocation);
+    const awayTokens = buildTokens(awayTeamName, awayLocation);
 
     console.log(`[Scouting] Home tokens: ${JSON.stringify(homeTokens)}`);
     console.log(`[Scouting] Away tokens: ${JSON.stringify(awayTokens)}`);
 
-    const hasToken   = (text, tokens)   => tokens.some(t => text.includes(t));
-    const hasKeyword = (text, keywords) => keywords.some(k => text.includes(k));
+    // ── Filter ───────────────────────────────────────────────────────────────
+    // Every article must pass three gates in order:
+    //   1. Title must not contain a disqualifying keyword
+    //   2. Title+snippet must mention the home team
+    //   3. Title+snippet must mention the away team
+    // No source gets a free pass — ESPN's combined feed and cross-feed articles
+    // often return general NBA news that does not mention both matchup teams.
 
-    const mentionsHome = unique.filter(a => hasToken(`${a.title} ${a.snippet}`.toLowerCase(), homeTokens)).length;
-    const mentionsAway = unique.filter(a => hasToken(`${a.title} ${a.snippet}`.toLowerCase(), awayTokens)).length;
-    console.log(`[Scouting] Mention home team: ${mentionsHome}  |  Mention away team: ${mentionsAway}`);
-
-    const EXCLUDE = ['injury', 'injured', 'out for', 'day-to-day', 'trade', 'signing', 'waived', 'rumors'];
+    const EXCLUDE_TITLE = [
+      'betting', 'dfs', 'odds', 'picks', 'fantasy', 'tickets',
+      'officiating', 'trade', 'injury', 'injured', 'rumors',
+      'mvp race', 'donating', 'rips'
+    ];
 
     const filtered = unique.filter(article => {
-      const text = `${article.title} ${article.snippet}`.toLowerCase();
-      if (EXCLUDE.some(k => text.includes(k))) return false;
-      // Cross-feed and summary articles are inherently about this matchup
-      if (crossUrlSet.has(article.url) || summaryUrlSet.has(article.url)) return true;
-      // All other sources must explicitly name both teams
-      return hasToken(text, homeTokens) && hasToken(text, awayTokens);
+      const titleLower = article.title.toLowerCase();
+      const checkText  = `${titleLower} ${(article.snippet || '').toLowerCase()}`;
+
+      const excludeMatch = EXCLUDE_TITLE.find(k => titleLower.includes(k));
+      if (excludeMatch) {
+        console.log(`[Scouting] REJECTED (exclude "${excludeMatch}"): "${article.title}"`);
+        return false;
+      }
+
+      if (!homeTokens.some(t => checkText.includes(t))) {
+        console.log(`[Scouting] REJECTED (missing "${homeTeamName}"): "${article.title}"`);
+        return false;
+      }
+
+      if (!awayTokens.some(t => checkText.includes(t))) {
+        console.log(`[Scouting] REJECTED (missing "${awayTeamName}"): "${article.title}"`);
+        return false;
+      }
+
+      return true;
     });
 
-    console.log(`[Scouting] After matchup + exclude filter: ${filtered.length} articles`);
-
-    if (filtered.length === 0) {
-      console.log('[Scouting] No articles passed. Sample titles from unique pool:');
-      unique.slice(0, 10).forEach(a => console.log(`  [${a.source}] "${a.title}"`));
-    }
+    console.log(`[Scouting] Matchup filter: ${filtered.length} / ${unique.length} articles passed`);
 
     const SECTIONS = [
       {
@@ -1233,7 +1260,7 @@ class NBAService {
       title: s.title,
       articles: filtered.filter(article => {
         const text = `${article.title} ${article.snippet}`.toLowerCase();
-        return hasKeyword(text, s.keywords);
+        return s.keywords.some(k => text.includes(k));
       })
     })).filter(s => s.articles.length > 0);
 
@@ -1271,12 +1298,24 @@ class NBAService {
       }
     ];
 
+    const sortedArticles = filtered
+      .slice()
+      .sort((a, b) => new Date(b.publishTime) - new Date(a.publishTime));
+
     return {
       gameId,
       gameDate: headerComp.date || null,
       homeTeam: { id: homeTeamId, name: homeTeamName },
       awayTeam: { id: awayTeamId, name: awayTeamName },
+      // Expose raw pool + filter config so the client can cache raw data and
+      // re-run the filter itself — filtered results are never what gets cached.
+      rawArticles:     unique,
+      homeTokens,
+      awayTokens,
+      excludeKeywords: EXCLUDE_TITLE,
       totalMatches: filtered.length,
+      limitedCoverage: filtered.length < 3,
+      articles: sortedArticles,
       sections,
       advancedSources
     };
