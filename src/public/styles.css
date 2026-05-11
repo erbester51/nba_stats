@@ -1645,10 +1645,153 @@ button:active {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 14px 0;
-  margin-bottom: 24px;
+  padding: 14px 0 10px;
   border-bottom: 1px solid var(--border);
   flex-wrap: wrap;
+}
+.bet-roster-note {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  padding: 5px 0 14px;
+  margin-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+}
+.bet-roster-warn {
+  color: #f59e0b;
+}
+
+/* ── Loading / source / rate-limit / retry styles ─── */
+.bet-markets-loading {
+  padding: 12px 0;
+  text-align: center;
+}
+
+.bet-loading-text {
+  font-size: 0.78rem;
+  color: var(--text-muted);
+  font-style: italic;
+  animation: bet-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes bet-pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+.bet-source-badge {
+  font-size: 0.6rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+.bet-source-live {
+  background: rgba(34, 197, 94, 0.12);
+  color: #4ade80;
+  border: 1px solid rgba(34, 197, 94, 0.25);
+}
+
+.bet-source-cached {
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+}
+
+.bet-rate-limited {
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  color: #f59e0b;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: 8px;
+}
+
+.bet-rate-retry-btn {
+  background: none;
+  border: none;
+  color: #60a5fa;
+  cursor: pointer;
+  font-size: 0.8rem;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.bet-rate-retry-btn:hover { color: #93c5fd; }
+.bet-rate-retry-btn:disabled { opacity: 0.5; cursor: default; }
+
+.bet-retry-bar {
+  padding: 6px 0;
+  margin-bottom: 8px;
+}
+
+.bet-retry-global-btn {
+  font-size: 0.75rem;
+  padding: 6px 14px;
+  border-radius: 7px;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.1);
+  color: #fbbf24;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 0.15s ease;
+}
+
+.bet-retry-global-btn:hover {
+  background: rgba(245, 158, 11, 0.18);
+}
+
+.bet-missing-btn {
+  font-size: 0.75rem;
+  padding: 6px 14px;
+  border-radius: 7px;
+  border: 1px solid rgba(96, 165, 250, 0.4);
+  background: rgba(96, 165, 250, 0.08);
+  color: #93c5fd;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.bet-missing-btn:hover {
+  background: rgba(96, 165, 250, 0.18);
+}
+
+.bet-retry-progress {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+}
+
+.bet-other-markets {
+  margin-top: 10px;
+  padding: 8px 10px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.bet-other-markets-title {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  margin-bottom: 6px;
+}
+.bet-other-market-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.bet-other-market-row:last-child { border-bottom: none; }
+.bet-other-market-desc { flex: 1; }
+.bet-other-market-line {
+  font-weight: 500;
+  color: var(--text-primary);
 }
 
 .bet-players-grid {
@@ -1673,6 +1816,10 @@ button:active {
   transition: border-color 0.2s ease;
 }
 
+.bet-player-card[data-collapsed="true"] {
+  gap: 0;
+}
+
 .bet-player-card:hover {
   border-color: rgba(200, 16, 46, 0.25);
 }
@@ -1681,6 +1828,25 @@ button:active {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+
+.bet-player-header-clickable {
+  cursor: pointer;
+  user-select: none;
+}
+
+.bet-card-chevron {
+  font-size: 1.15rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  display: inline-block;
+  transition: transform 0.25s ease;
+  transform: rotate(90deg); /* › rotated = ↓ = expanded */
+  line-height: 1;
+}
+
+.bet-player-card[data-collapsed="true"] .bet-card-chevron {
+  transform: rotate(0deg); /* › = pointing right = collapsed */
 }
 
 .bet-player-avatar {
@@ -1741,10 +1907,41 @@ button:active {
   font-style: italic;
 }
 
+.bet-collapse-controls {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.bet-collapse-btn {
+  font-size: 0.72rem;
+  padding: 4px 11px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.bet-collapse-btn:hover {
+  color: var(--text);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
 .bet-markets-list {
   display: flex;
   flex-direction: column;
   gap: 7px;
+  overflow: hidden;
+  max-height: 3000px;
+  opacity: 1;
+  transition: max-height 0.35s ease, opacity 0.2s ease;
+}
+
+.bet-player-card[data-collapsed="true"] .bet-markets-list {
+  max-height: 0;
+  opacity: 0;
 }
 
 .bet-market-item {
@@ -2237,6 +2434,11 @@ button:active {
   color: #555;
   font-size: 0.8rem;
 }
+.top5-price-na {
+  font-size: 0.68rem;
+  color: #555;
+  font-style: italic;
+}
 @keyframes top5RowFlash {
   0%   { background: rgba(251, 191, 36, 0.28); }
   100% { background: transparent; }
@@ -2261,6 +2463,75 @@ button:active {
 }
 .top5-section-cross .top5-table th {
   border-bottom-color: rgba(59, 130, 246, 0.2);
+}
+
+/* ── Tier breakdown ──────────────────────────────── */
+.bet-tier-breakdown {
+  margin: 6px 0 4px;
+  padding: 6px 8px;
+  background: rgba(255,255,255,0.04);
+  border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.07);
+  font-size: 0.72rem;
+}
+.bet-tier-header,
+.bet-tier-row {
+  display: grid;
+  grid-template-columns: 1fr 44px 44px 48px;
+  gap: 4px;
+  align-items: center;
+  padding: 2px 0;
+}
+.bet-tier-header {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 0.66rem;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  margin-bottom: 2px;
+  padding-bottom: 3px;
+}
+.bet-tier-label  { color: var(--text-muted); }
+.bet-tier-games  { text-align: right; color: var(--text-muted); }
+.bet-tier-rate   { text-align: right; font-weight: 600; color: var(--text); }
+.bet-tier-weight { text-align: right; color: var(--text-muted); }
+.bet-tier-dim .bet-tier-rate,
+.bet-tier-dim .bet-tier-label {
+  opacity: 0.4;
+}
+.bet-tier-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+.bet-tier-total-label { font-weight: 600; color: var(--text-muted); font-size: 0.7rem; }
+.bet-tier-score       { font-weight: 700; font-size: 0.82rem; }
+
+/* ── Series indicator ────────────────────────────── */
+.bet-series-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  vertical-align: middle;
+}
+.bet-series-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: rgba(255,255,255,0.15);
+}
+.bet-series-dot-filled {
+  background: #3b82f6;
+}
+.bet-series-label {
+  font-size: 0.68rem;
+  color: #3b82f6;
+  font-weight: 600;
+  margin-left: 3px;
 }
 
 /* ── Parlay Builder sortable headers ─────────────── */

@@ -65,7 +65,25 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\('upcoming games:', len\\(d.get\\('games',[]\\)\\)\\)\")",
       "Bash(taskkill /F /IM node.exe)",
       "PowerShell(Invoke-RestMethod \"http://localhost:3000/api/health\")",
-      "PowerShell($proc = Start-Process -FilePath \"node\" -ArgumentList \"src/index.js\" -WorkingDirectory \"C:\\\\Users\\\\erbes\\\\projects\\\\nba_stats\" -PassThru -WindowStyle Hidden; Start-Sleep -Seconds 3; $proc.Id)"
+      "PowerShell($proc = Start-Process -FilePath \"node\" -ArgumentList \"src/index.js\" -WorkingDirectory \"C:\\\\Users\\\\erbes\\\\projects\\\\nba_stats\" -PassThru -WindowStyle Hidden; Start-Sleep -Seconds 3; $proc.Id)",
+      "Bash(curl -s http://localhost:3000/api/games)",
+      "Bash(curl -s \"http://localhost:3000/api/games/upcoming?days=7\")",
+      "Bash(python -c \"import sys,json; games=json.load\\(sys.stdin\\); [print\\(g['gameId'], g['date'][:10], g['name']\\) for g in games]\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); games=d if isinstance\\(d,list\\) else d.get\\('games',[]\\); [print\\(g.get\\('gameId',''\\), g.get\\('date',''\\)[:10], g.get\\('name',''\\)\\) for g in games]\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import sys,json; print\\(json.dumps\\(json.load\\(sys.stdin\\)[0], indent=2\\)\\)\")",
+      "Bash(python -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(list\\(d.keys\\(\\)\\)[:5]\\); v=list\\(d.values\\(\\)\\); print\\(json.dumps\\(v[0], indent=2\\)\\)\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871336/betting/setup\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871336/betting/setup?force=1\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871336/betting/player/4432166\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871336/betting/player/3992\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871336/betting/player/4432158\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871336/betting/player/4066328\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871336/betting/player/4432810\")",
+      "Bash(curl -s \"http://localhost:3000/api/games/401871336/betting/player/3032979\")",
+      "Bash(findstr :3000)",
+      "Bash(findstr LISTENING)",
+      "Bash(taskkill *)"
     ]
   }
 }

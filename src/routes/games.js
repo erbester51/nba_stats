@@ -18,7 +18,11 @@ router.get('/:gameId/players', gamesController.getGamePlayers);
 // Get scouting report for a specific game
 router.get('/:gameId/scouting', gamesController.getScoutingReport);
 
-// Get Kalshi bet analysis for a specific game
+// Progressive bet analysis: fast setup (roster + Kalshi, no game logs)
+router.get('/:gameId/betting/setup', bettingController.getGameSetup);
+// Per-player stats (game logs + scoring for one player, with retry logic)
+router.get('/:gameId/betting/player/:athleteId', bettingController.getPlayerBetStats);
+// Legacy single-shot analysis (kept for backward compat)
 router.get('/:gameId/betting', bettingController.getBettingAnalysis);
 
 // Get game details by game ID

@@ -1,4 +1,5 @@
 const apiBase = '/api';
+const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 const dom = {
   tabs: document.querySelectorAll('.tab-button'),
@@ -46,18 +47,62 @@ const bettingState = {
   overrides: {}, // key: `${athleteId}_${stat}`, value: custom line (integer)
   allGames: {},  // gameId → { players, teams } — accumulates across analyses this session
   top5Keys: [],  // previous top5 pick keys for flash-animation diff
-  parlaySort: { col: null, dir: null },
+  parlaySort: { col: 'hitrate', dir: 'desc' },
+  cardCollapsed: new Set(),   // athleteIds of currently-collapsed player cards
+  failedPlayers: new Set(),   // athleteIds that failed to load (rate-limited or error)
 };
 
-// Re-score a stat against a custom line using cached last-20 game values
-function clientRescore(gameValues, line) {
-  if (!gameValues || !gameValues.length) return { overRate: 0, rating: 'red', gamesAnalyzed: 0 };
-  const over = gameValues.filter(v => v >= line).length;
-  const rate = over / gameValues.length;
+// Re-score a stat against a custom line using cached per-tier game values
+function clientRescore(tierGameValues, line) {
+  const BASE_W = { t1: 0.38, t2: 0.27, t3: 0.22, t4: 0.13 };
+  const tgv = tierGameValues || {};
+
+  function tierRate(vals) {
+    if (!vals || !vals.length) return null;
+    return vals.filter(v => v >= line).length / vals.length;
+  }
+
+  const series   = tgv.series   || [];
+  const playoffs = tgv.playoffs || [];
+  const vsReg    = tgv.vsReg    || [];
+  const regular  = tgv.regular  || [];
+
+  const t1Rate = tierRate(series);
+  const t2Rate = tierRate(playoffs);
+  const t3Rate = tierRate(vsReg);
+  const t4Rate = tierRate(regular);
+
+  const t1Scale = series.length   ? Math.min(series.length   / 4, 1) : 0;
+  const t3Scale = vsReg.length    ? Math.min(vsReg.length    / 3, 1) : 0;
+
+  const rawW = {
+    t1: t1Rate != null ? BASE_W.t1 * t1Scale : 0,
+    t2: t2Rate != null ? BASE_W.t2           : 0,
+    t3: t3Rate != null ? BASE_W.t3 * t3Scale : 0,
+    t4: t4Rate != null ? BASE_W.t4           : 0,
+  };
+  const totalRaw = rawW.t1 + rawW.t2 + rawW.t3 + rawW.t4;
+
+  let weightedScore = 0;
+  const tiers = {};
+  if (totalRaw > 0) {
+    const norm = { t1: rawW.t1/totalRaw, t2: rawW.t2/totalRaw, t3: rawW.t3/totalRaw, t4: rawW.t4/totalRaw };
+    weightedScore = (t1Rate??0)*norm.t1 + (t2Rate??0)*norm.t2 + (t3Rate??0)*norm.t3 + (t4Rate??0)*norm.t4;
+    tiers.t1 = { games: series.length,   rate: t1Rate, weight: Math.round(norm.t1*100), label: 'Series vs Opp' };
+    tiers.t2 = { games: playoffs.length, rate: t2Rate, weight: Math.round(norm.t2*100), label: 'All Playoffs'  };
+    tiers.t3 = { games: vsReg.length,    rate: t3Rate, weight: Math.round(norm.t3*100), label: 'Reg vs Opp'   };
+    tiers.t4 = { games: regular.length,  rate: t4Rate, weight: Math.round(norm.t4*100), label: 'All Reg Season' };
+  }
+
+  const score = Math.round(weightedScore * 100);
+  const rating = weightedScore >= 0.80 ? 'green' : weightedScore >= 0.65 ? 'blue' : weightedScore >= 0.50 ? 'yellow' : 'red';
   return {
-    overRate: Math.round(rate * 100),
-    gamesAnalyzed: gameValues.length,
-    rating: rate >= 0.70 ? 'green' : rate >= 0.55 ? 'blue' : rate >= 0.40 ? 'yellow' : 'red',
+    overRate: score,
+    weightedScore: score,
+    gamesAnalyzed: regular.length + playoffs.length,
+    rating,
+    tiers,
+    seriesGames: series.length,
   };
 }
 
@@ -1015,18 +1060,348 @@ async function fetchBettingAnalysis() {
   if (!gameId) return;
 
   dom.bettingLoading.classList.remove('hidden');
+  dom.bettingLoading.textContent = 'Fetching Kalshi markets and roster…';
   dom.bettingError.classList.add('hidden');
   dom.bettingContent.innerHTML = '';
+  dom.bettingFetchBtn.disabled = true;
 
   try {
-    const data = await fetchJson(`${apiBase}/games/${gameId}/betting`);
+    // Phase 1: fast setup — roster + Kalshi markets, no game log fetches
+    const setup = await fetchJson(`${apiBase}/games/${gameId}/betting/setup`);
+
+    if (!setup.players || !setup.players.length) {
+      dom.bettingLoading.classList.add('hidden');
+      dom.bettingFetchBtn.disabled = false;
+      const msg = setup.message || 'No player data available for this game.';
+      dom.bettingContent.innerHTML = `<div class="card card-animate"><p class="bet-empty-msg">${msg}</p></div>`;
+      return;
+    }
+
+    // Initialise state from setup
+    bettingState.players   = setup.players.map(p => ({ ...p, stats: null, summary: null, seriesGames: 0 }));
+    bettingState.teams     = setup.teams || [];
+    bettingState.overrides = {};
+    bettingState.top5Keys  = [];
+    bettingState.parlaySort   = { col: 'hitrate', dir: 'desc' };
+    bettingState.failedPlayers = new Set();
+    bettingState.cardCollapsed = new Set(
+      setup.players.filter(p => !p.hasMarkets).map(p => String(p.athleteId))
+    );
+    if (setup.gameId) {
+      bettingState.allGames[setup.gameId] = { players: bettingState.players, teams: bettingState.teams };
+    }
+
+    // Render shell cards (loading state — no stats yet)
+    renderBettingShells(setup);
+
+    const players = bettingState.players;
+    const total   = players.length;
+
+    // Phase 2: fetch each player's stats sequentially with 600 ms delay
+    for (let i = 0; i < players.length; i++) {
+      const player = players[i];
+      const aid    = String(player.athleteId);
+
+      dom.bettingLoading.textContent = `Loading player ${i + 1} of ${total} — ${player.playerName}…`;
+
+      // Check localStorage cache (4 h TTL)
+      const cacheKey = `nba_bet_${gameId}_${aid}`;
+      let fromCache = false;
+      try {
+        const lsRaw = localStorage.getItem(cacheKey);
+        if (lsRaw) {
+          const parsed = JSON.parse(lsRaw);
+          if (Date.now() - parsed.ts < 4 * 60 * 60 * 1000) {
+            // Validate cache: if setup says a stat has markets but cache has null, it's stale
+            const cachedStats  = (parsed.data && parsed.data.stats) || {};
+            const setupMarkets = player.markets || {};
+            const isStale = Object.keys(setupMarkets).some(
+              stat => setupMarkets[stat] && Object.keys(setupMarkets[stat]).length > 0 && !cachedStats[stat]
+            );
+            if (isStale) {
+              localStorage.removeItem(cacheKey);
+            } else {
+              Object.assign(player, parsed.data);
+              updatePlayerCardStats(player, 'cached');
+              updateParlaySection();
+              fromCache = true;
+            }
+          }
+        }
+      } catch { /* stale or corrupt cache entry — ignore */ }
+
+      if (!fromCache) {
+        try {
+          const statsData = await fetchJson(`${apiBase}/games/${gameId}/betting/player/${aid}`);
+          if (statsData.rateLimited) {
+            bettingState.failedPlayers.add(aid);
+            markPlayerRateLimited(player);
+          } else {
+            Object.assign(player, {
+              stats:        statsData.stats,
+              summary:      statsData.summary,
+              seriesGames:  statsData.seriesGames || 0,
+              otherMarkets: statsData.otherMarkets || [],
+            });
+            try {
+              localStorage.setItem(cacheKey, JSON.stringify({
+                data: { stats: statsData.stats, summary: statsData.summary, seriesGames: statsData.seriesGames || 0, otherMarkets: statsData.otherMarkets || [] },
+                ts: Date.now(),
+              }));
+            } catch { /* localStorage full */ }
+            updatePlayerCardStats(player, 'live');
+            updateParlaySection();
+          }
+        } catch (err) {
+          bettingState.failedPlayers.add(aid);
+          markPlayerRateLimited(player);
+          console.warn(`[Betting] Failed ${player.playerName}:`, err.message);
+        }
+
+        // Stagger: delay before the next player fetch (not needed after the last one)
+        if (i < players.length - 1) await sleep(600);
+      }
+    }
+
     dom.bettingLoading.classList.add('hidden');
-    renderBettingContent(data);
+    dom.bettingFetchBtn.disabled = false;
+    updateRetryButton();
+    updateMissingMarketsButton();
+
   } catch (error) {
     dom.bettingLoading.classList.add('hidden');
+    dom.bettingFetchBtn.disabled = false;
     dom.bettingError.textContent = `Error loading bet analysis: ${error.message}`;
     dom.bettingError.classList.remove('hidden');
   }
+}
+
+function renderBettingShells(setup) {
+  const t = setup.teams || [];
+
+  const rosterNoteHtml = (setup.rosterCounts && setup.rosterCounts.length)
+    ? `<div class="bet-roster-note">${
+        setup.rosterCounts.map(rc => {
+          const showing = (setup.players || []).filter(p => String(p.teamId) === String(rc.teamId)).length;
+          return `${showing} of ${rc.total} players &mdash; ${rc.abbreviation}`;
+        }).join(' &nbsp;|&nbsp; ')
+      }${setup.message ? ` &nbsp;&middot;&nbsp; <span class="bet-roster-warn">${setup.message}</span>` : ''}</div>`
+    : '';
+
+  const matchupHtml = t.length === 2 ? `
+    <div class="bet-matchup-header">
+      <span class="scouting-team">${t[0].teamName}</span>
+      <span class="scouting-at">vs</span>
+      <span class="scouting-team">${t[1].teamName}</span>
+      ${setup.kalshiTotal ? `<span class="scouting-cache-badge">${setup.kalshiTotal} Kalshi markets</span>` : ''}
+    </div>
+    ${rosterNoteHtml}` : '';
+
+  const collapseControlsHtml = `
+    <div class="bet-collapse-controls">
+      <button class="bet-collapse-btn" data-bet-action="collapse-all">Collapse All</button>
+      <button class="bet-collapse-btn" data-bet-action="expand-all">Expand All</button>
+    </div>`;
+
+  const playersHtml = bettingState.players
+    .map(p => renderBetPlayerCard(p, setup.teams, bettingState.cardCollapsed.has(String(p.athleteId))))
+    .join('');
+
+  dom.bettingContent.innerHTML = `
+    <div class="card card-animate">
+      ${matchupHtml}
+      <div id="bet-retry-bar" class="bet-retry-bar hidden"></div>
+      <div id="bet-missing-bar" class="bet-retry-bar hidden"></div>
+      ${collapseControlsHtml}
+      <div class="bet-players-grid">${playersHtml}</div>
+      <div id="bet-parlay-section"></div>
+    </div>`;
+}
+
+function updatePlayerCardStats(player, source) {
+  const card = document.querySelector(`.bet-player-card[data-aid="${player.athleteId}"]`);
+  if (!card) return;
+
+  const opponentTeam = bettingState.teams.find(t => String(t.teamId) !== String(player.teamId));
+  const opponentAbbr = opponentTeam ? opponentTeam.abbreviation : 'OPP';
+
+  const summaryEl = card.querySelector('.bet-summary');
+  if (summaryEl) {
+    const pills = Object.entries(player.summary || {})
+      .filter(([, count]) => count > 0)
+      .map(([rating, count]) =>
+        `<span class="bet-summary-pill bet-pill-${rating}">${count} ${BET_RATING_LABELS[rating]}</span>`
+      ).join('');
+    const badge = `<span class="bet-source-badge bet-source-${source}">${source === 'cached' ? 'Cached' : 'Live'}</span>`;
+    summaryEl.innerHTML = (pills || '<span class="bet-no-markets-badge">No lines</span>') + badge;
+  }
+
+  const marketsEl = card.querySelector('.bet-markets-list');
+  if (marketsEl && player.stats) {
+    const statRows = Object.keys(BET_STAT_LABELS)
+      .map(stat => renderBetStatRow(stat, player.stats[stat], opponentAbbr, player.athleteId))
+      .join('');
+    marketsEl.innerHTML = statRows + renderOtherMarketsSection(player.otherMarkets);
+  }
+}
+
+function markPlayerRateLimited(player) {
+  const card = document.querySelector(`.bet-player-card[data-aid="${player.athleteId}"]`);
+  if (!card) return;
+  const marketsEl = card.querySelector('.bet-markets-list');
+  if (marketsEl) {
+    marketsEl.innerHTML = `<div class="bet-rate-limited">Rate limited &mdash; <button class="bet-rate-retry-btn" data-aid="${player.athleteId}">click to retry</button></div>`;
+  }
+  const summaryEl = card.querySelector('.bet-summary');
+  if (summaryEl) summaryEl.innerHTML = '<span class="bet-no-markets-badge">Rate limited</span>';
+}
+
+function updateParlaySection() {
+  const section = document.getElementById('bet-parlay-section');
+  if (!section) return;
+  // Only render once at least one player has stats (avoids misleading "no bets" message during load)
+  if (!bettingState.players.some(p => p.stats !== null)) return;
+  section.innerHTML = renderParlayHtml();
+}
+
+function updateRetryButton() {
+  const bar = document.getElementById('bet-retry-bar');
+  if (!bar) return;
+  if (bettingState.failedPlayers.size > 0) {
+    bar.innerHTML = `<button class="bet-retry-global-btn" id="bet-retry-btn">${bettingState.failedPlayers.size} player(s) failed &mdash; Retry Failed Stats</button>`;
+    bar.classList.remove('hidden');
+  } else {
+    bar.classList.add('hidden');
+    bar.innerHTML = '';
+  }
+}
+
+function updateMissingMarketsButton() {
+  const bar = document.getElementById('bet-missing-bar');
+  if (!bar) return;
+  // Count players whose stats are loaded but have zero Kalshi markets
+  const missing = bettingState.players.filter(p =>
+    p.stats !== null && !p.hasMarkets
+  );
+  if (missing.length > 0) {
+    bar.innerHTML = `<button class="bet-missing-btn" id="bet-missing-btn">${missing.length} player${missing.length > 1 ? 's' : ''} with no markets &mdash; Retry Missing Markets</button>`;
+    bar.classList.remove('hidden');
+  } else {
+    bar.classList.add('hidden');
+    bar.innerHTML = '';
+  }
+}
+
+async function retryMissingMarkets() {
+  const gameId = dom.bettingGameSelect.value;
+  if (!gameId) return;
+
+  const missing = bettingState.players.filter(p => p.stats !== null && !p.hasMarkets);
+  if (!missing.length) return;
+
+  const bar = document.getElementById('bet-missing-bar');
+  if (bar) bar.innerHTML = `<span class="bet-retry-progress">Re-fetching Kalshi markets…</span>`;
+
+  try {
+    // Force-clear the server cache and re-run Kalshi matching with improved logic
+    const setup = await fetchJson(`${apiBase}/games/${gameId}/betting/setup?force=1`);
+
+    // Find players that now have markets after the re-match
+    const gained = [];
+    for (const freshP of (setup.players || [])) {
+      if (!freshP.hasMarkets) continue;
+      const existing = bettingState.players.find(p => String(p.athleteId) === String(freshP.athleteId));
+      if (!existing || existing.hasMarkets) continue;
+      // This player gained markets — update state
+      existing.hasMarkets = true;
+      existing.markets    = freshP.markets;
+      // Expand the card so the user sees the new data
+      bettingState.cardCollapsed.delete(String(existing.athleteId));
+      const card = document.querySelector(`.bet-player-card[data-aid="${existing.athleteId}"]`);
+      if (card) card.setAttribute('data-collapsed', 'false');
+      gained.push(existing);
+    }
+
+    if (!gained.length) {
+      if (bar) bar.innerHTML = `<span class="bet-retry-progress">No new markets found.</span>`;
+      setTimeout(() => updateMissingMarketsButton(), 2500);
+      return;
+    }
+
+    if (bar) bar.innerHTML = `<span class="bet-retry-progress">Found markets for ${gained.length} player${gained.length > 1 ? 's' : ''} — loading stats…</span>`;
+
+    // Fetch stats for newly matched players
+    for (let i = 0; i < gained.length; i++) {
+      const player = gained[i];
+      const aid    = String(player.athleteId);
+      try {
+        const statsData = await fetchJson(`${apiBase}/games/${gameId}/betting/player/${aid}`);
+        if (!statsData.rateLimited) {
+          Object.assign(player, {
+            stats:        statsData.stats,
+            summary:      statsData.summary,
+            seriesGames:  statsData.seriesGames || 0,
+            otherMarkets: statsData.otherMarkets || [],
+          });
+          try {
+            localStorage.setItem(`nba_bet_${gameId}_${aid}`, JSON.stringify({
+              data: { stats: statsData.stats, summary: statsData.summary, seriesGames: statsData.seriesGames || 0, otherMarkets: statsData.otherMarkets || [] },
+              ts: Date.now(),
+            }));
+          } catch {}
+          updatePlayerCardStats(player, 'live');
+          updateParlaySection();
+        }
+      } catch {}
+      if (i < gained.length - 1) await sleep(600);
+    }
+  } catch (err) {
+    console.warn('[Retry Missing Markets]', err.message);
+  }
+
+  updateMissingMarketsButton();
+}
+
+async function retryFailedPlayers() {
+  const gameId = dom.bettingGameSelect.value;
+  if (!gameId || !bettingState.failedPlayers.size) return;
+
+  const failed = [...bettingState.failedPlayers];
+  bettingState.failedPlayers = new Set();
+
+  const bar = document.getElementById('bet-retry-bar');
+  if (bar) bar.innerHTML = `<span class="bet-retry-progress">Retrying ${failed.length} player(s)…</span>`;
+
+  for (let i = 0; i < failed.length; i++) {
+    const aid    = failed[i];
+    const player = bettingState.players.find(p => String(p.athleteId) === String(aid));
+    if (!player) continue;
+
+    try {
+      const statsData = await fetchJson(`${apiBase}/games/${gameId}/betting/player/${aid}`);
+      if (statsData.rateLimited) {
+        bettingState.failedPlayers.add(aid);
+        markPlayerRateLimited(player);
+      } else {
+        Object.assign(player, { stats: statsData.stats, summary: statsData.summary, seriesGames: statsData.seriesGames || 0, otherMarkets: statsData.otherMarkets || [] });
+        try {
+          localStorage.setItem(`nba_bet_${gameId}_${aid}`, JSON.stringify({
+            data: { stats: statsData.stats, summary: statsData.summary, seriesGames: statsData.seriesGames || 0, otherMarkets: statsData.otherMarkets || [] },
+            ts: Date.now(),
+          }));
+        } catch {}
+        updatePlayerCardStats(player, 'live');
+        updateParlaySection();
+      }
+    } catch (err) {
+      bettingState.failedPlayers.add(aid);
+      markPlayerRateLimited(player);
+    }
+
+    if (i < failed.length - 1) await sleep(3000);
+  }
+
+  updateRetryButton();
 }
 
 // ── Parlay builder ───────────────────────────────────────────────────────────
@@ -1080,7 +1455,7 @@ function collectLegs(players, teams, includeCustom = false) {
     const gameLabel = teams.length === 2
       ? `${teams[0].abbreviation} vs ${teams[1].abbreviation}` : '';
 
-    Object.entries(player.stats).forEach(([stat, analysis]) => {
+    Object.entries(player.stats || {}).forEach(([stat, analysis]) => {
       if (!analysis) return;
       if (analysis.rating !== 'green' && analysis.rating !== 'blue') return;
 
@@ -1093,11 +1468,12 @@ function collectLegs(players, teams, includeCustom = false) {
       if (yesPrice == null) return;
 
       legs.push({
-        playerName: player.playerName,
+        playerName:   player.playerName,
         stat,
-        line: analysis.line,
-        rating: analysis.rating,
-        overRate: analysis.overRate,
+        line:         analysis.line,
+        rating:       analysis.rating,
+        overRate:     analysis.overRate,
+        weightedScore: analysis.weightedScore ?? analysis.overRate,
         gamesAnalyzed: analysis.gamesAnalyzed,
         yesPrice,
         isCustom,
@@ -1109,42 +1485,29 @@ function collectLegs(players, teams, includeCustom = false) {
   return legs;
 }
 
-// Per-game Top 5 — strictly scoped to one game's players/teams
-function buildPerGameTop5(players, teams) {
-  const all = [];
-  collectLegs(players, teams, true).forEach(leg => {
-    if (!leg.isCustom && leg.yesPrice === 0) return;
-    all.push(leg);
-  });
-  all.sort((a, b) => {
-    if (b.overRate !== a.overRate) return b.overRate - a.overRate;
-    if (b.yesPrice !== a.yesPrice) return b.yesPrice - a.yesPrice;
-    if (a.rating === 'green' && b.rating !== 'green') return -1;
-    if (b.rating === 'green' && a.rating !== 'green') return 1;
-    return 0;
-  });
-  return all.slice(0, 5);
+// Ranking: 1st weighted score DESC, 2nd rating (green→blue→yellow→red), 3rd price DESC
+const TOP5_RATING_ORDER = { green: 0, blue: 1, yellow: 2, red: 3 };
+function top5Sort(a, b) {
+  const wsDiff = (b.weightedScore ?? b.overRate) - (a.weightedScore ?? a.overRate);
+  if (wsDiff !== 0) return wsDiff;
+  const ratingDiff = (TOP5_RATING_ORDER[a.rating] ?? 99) - (TOP5_RATING_ORDER[b.rating] ?? 99);
+  if (ratingDiff !== 0) return ratingDiff;
+  return (b.yesPrice || 0) - (a.yesPrice || 0);
 }
 
-// Cross-game Top 5 ranked by: overRate DESC → yesPrice DESC → green before blue
+// Per-game Top 5 — strictly scoped to one game's players/teams
+function buildPerGameTop5(players, teams) {
+  const all = collectLegs(players, teams, true);
+  return all.sort(top5Sort).slice(0, 5);
+}
+
+// Cross-game Top 5 ranked by weighted score → rating → price
 function buildTop5Picks() {
   const all = [];
   Object.values(bettingState.allGames).forEach(({ players, teams }) => {
-    collectLegs(players, teams, true).forEach(leg => {
-      if (!leg.isCustom && leg.yesPrice === 0) return; // exclude real 0¢ Kalshi markets
-      all.push(leg);
-    });
+    collectLegs(players, teams, true).forEach(leg => all.push(leg));
   });
-
-  all.sort((a, b) => {
-    if (b.overRate !== a.overRate) return b.overRate - a.overRate;
-    if (b.yesPrice !== a.yesPrice) return b.yesPrice - a.yesPrice;
-    if (a.rating === 'green' && b.rating !== 'green') return -1;
-    if (b.rating === 'green' && a.rating !== 'green') return 1;
-    return 0;
-  });
-
-  return all.slice(0, 5);
+  return all.sort(top5Sort).slice(0, 5);
 }
 
 // opts.perGame  — true: scoped to one game, false: cross-game
@@ -1168,7 +1531,9 @@ function renderTop5Html(top5, flash = false, opts = {}) {
     const customBadge = pick.isCustom ? '<span class="top5-custom-badge">Custom</span>' : '';
     const priceCell = pick.isCustom
       ? `<span class="top5-no-price">&mdash;</span>`
-      : `<span class="bet-parlay-price">${pick.yesPrice}&cent; yes</span>`;
+      : pick.yesPrice > 0
+        ? `<span class="bet-parlay-price">${pick.yesPrice}&cent; yes</span>`
+        : `<span class="top5-price-na">Price N/A</span>`;
     return `
       <tr${rowAttrs}>
         <td class="top5-rank">${i + 1}</td>
@@ -1177,7 +1542,7 @@ function renderTop5Html(top5, flash = false, opts = {}) {
         <td>${BET_STAT_LABELS[pick.stat] || pick.stat}</td>
         <td class="bet-parlay-line">O ${pick.line}</td>
         <td>${priceCell}</td>
-        <td>${pick.overRate}% <span class="bet-parlay-games">last ${pick.gamesAnalyzed}</span></td>
+        <td>${pick.weightedScore ?? pick.overRate}%</td>
         <td><span class="bet-rating-badge bet-rating-${pick.rating}">${pick.rating.toUpperCase()}</span></td>
       </tr>`;
   }).join('');
@@ -1186,12 +1551,13 @@ function renderTop5Html(top5, flash = false, opts = {}) {
 
   const pricedLegs = top5.filter(p => p.yesPrice > 0);
   const multiplier = pricedLegs.reduce((m, p) => m * (100 / p.yesPrice), 1);
-  const avgHitRate = Math.round(top5.reduce((s, p) => s + p.overRate, 0) / top5.length);
+  const avgHitRate = Math.round(top5.reduce((s, p) => s + (p.weightedScore ?? p.overRate), 0) / top5.length);
   const confRating = avgHitRate >= 80 ? 'green' : avgHitRate >= 65 ? 'blue' : avgHitRate >= 50 ? 'yellow' : 'red';
   const confLabel  = avgHitRate >= 80 ? 'High' : avgHitRate >= 65 ? 'Moderate' : avgHitRate >= 50 ? 'Low' : 'Poor';
 
-  const excludedNote = pricedLegs.length < top5.length
-    ? `<p class="top5-exclude-note">${top5.length - pricedLegs.length} pick(s) with $0¢ price excluded from multiplier.</p>`
+  const excludedCount = top5.length - pricedLegs.length;
+  const excludedNote = excludedCount > 0
+    ? `<p class="top5-exclude-note">${excludedCount} pick${excludedCount > 1 ? 's' : ''} excluded from multiplier &mdash; Kalshi price unavailable</p>`
     : '';
 
   const payoutRows = [10, 25, 50].map(stake =>
@@ -1204,8 +1570,8 @@ function renderTop5Html(top5, flash = false, opts = {}) {
     ? `Top 5 Picks &mdash; ${gameLabel}`
     : `Top Picks &mdash; Across ${Object.keys(bettingState.allGames).length} Games`;
   const subtitleText = perGame
-    ? 'Best bets from this game by hit rate then Kalshi price.'
-    : 'Best bets across all analyzed games by hit rate then Kalshi price.';
+    ? 'Best bets from this game ranked by weighted score, then rating, then Kalshi price.'
+    : 'Best bets across all analyzed games ranked by weighted score, then rating, then Kalshi price.';
   const badge = !perGame
     ? `<span class="top5-multi-badge">${Object.keys(bettingState.allGames).length} games</span>`
     : '';
@@ -1223,14 +1589,14 @@ function renderTop5Html(top5, flash = false, opts = {}) {
           <table class="top5-table">
             <thead>
               <tr>
-                <th>#</th><th>Player</th>${gameColHeader}<th>Stat</th><th>Line</th><th>Price</th><th>Hit Rate</th><th>Rating</th>
+                <th>#</th><th>Player</th>${gameColHeader}<th>Stat</th><th>Line</th><th>Price</th><th>W. Score</th><th>Rating</th>
               </tr>
             </thead>
             <tbody>${rowsHtml}</tbody>
           </table>
         </div>
         <div class="top5-summary-card">
-          <div class="top5-conf-label">Avg Hit Rate</div>
+          <div class="top5-conf-label">Avg W. Score</div>
           <div class="top5-conf-val bet-rating-${confRating}">${avgHitRate}%</div>
           <div class="top5-conf-badge bet-rating-${confRating}">${confLabel} Confidence</div>
           <div class="top5-multiplier">${multiplier.toFixed(2)}x</div>
@@ -1286,7 +1652,7 @@ function renderParlayHtml(flash = false) {
       <td>${BET_STAT_LABELS[leg.stat] || leg.stat}</td>
       <td class="bet-parlay-line">O ${leg.line}</td>
       <td><span class="bet-parlay-price">${leg.yesPrice}&cent; yes</span></td>
-      <td>${leg.overRate}% <span class="bet-parlay-games">last ${leg.gamesAnalyzed}</span></td>
+      <td>${leg.weightedScore ?? leg.overRate}%</td>
       <td><span class="bet-rating-badge bet-rating-${leg.rating}">${leg.rating.toUpperCase()}</span></td>
     </tr>`).join('');
 
@@ -1304,7 +1670,7 @@ function renderParlayHtml(flash = false) {
       <div class="bet-parlay-layout">
         <div class="bet-parlay-legs-wrap">
           <table class="bet-parlay-table">
-            <thead><tr>${renderParlayTh('player','Player')}${renderParlayTh('stat','Stat')}${renderParlayTh('line','Line')}${renderParlayTh('price','Price')}${renderParlayTh('hitrate','Hit Rate')}${renderParlayTh('rating','Rating')}</tr></thead>
+            <thead><tr>${renderParlayTh('player','Player')}${renderParlayTh('stat','Stat')}${renderParlayTh('line','Line')}${renderParlayTh('price','Price')}${renderParlayTh('hitrate','W. Score')}${renderParlayTh('rating','Rating')}</tr></thead>
             <tbody>${legsHtml}</tbody>
           </table>
         </div>
@@ -1336,11 +1702,14 @@ function applyLineOverride(athleteId, stat, newLine) {
     bettingState.overrides[key] = newLine;
   }
 
-  const rescore = clientRescore(analysis.gameValues, newLine);
-  analysis.line    = newLine;
+  const rescore = clientRescore(analysis.tierGameValues, newLine);
+  analysis.line          = newLine;
   analysis.overRate      = rescore.overRate;
+  analysis.weightedScore = rescore.weightedScore;
   analysis.gamesAnalyzed = rescore.gamesAnalyzed;
   analysis.rating        = rescore.rating;
+  analysis.tiers         = rescore.tiers;
+  analysis.seriesGames   = rescore.seriesGames;
 
   const summary = { green: 0, blue: 0, yellow: 0, red: 0 };
   Object.values(player.stats).forEach(a => { if (a) summary[a.rating]++; });
@@ -1441,28 +1810,50 @@ function renderBettingContent(data) {
   bettingState.teams    = data.teams || [];
   bettingState.overrides = {};
   bettingState.top5Keys = [];
-  bettingState.parlaySort = { col: null, dir: null };
+  bettingState.parlaySort = { col: 'hitrate', dir: 'desc' };
+  // Auto-collapse players with no Kalshi markets; all others start expanded
+  bettingState.cardCollapsed = new Set(
+    data.players.filter(p => !Object.values(p.stats).some(Boolean)).map(p => String(p.athleteId))
+  );
   // Accumulate into cross-game store (shared reference — mutations via applyLineOverride are reflected)
   if (data.gameId) {
     bettingState.allGames[data.gameId] = { players: data.players, teams: data.teams || [] };
   }
 
   const t = data.teams || [];
+
+  const rosterNoteHtml = (data.rosterCounts && data.rosterCounts.length)
+    ? `<div class="bet-roster-note">${
+        data.rosterCounts.map(rc => {
+          const showing = (data.players || []).filter(p => String(p.teamId) === String(rc.teamId)).length;
+          return `${showing} of ${rc.total} players &mdash; ${rc.abbreviation}`;
+        }).join(' &nbsp;|&nbsp; ')
+      }${data.message ? ` &nbsp;&middot;&nbsp; <span class="bet-roster-warn">${data.message}</span>` : ''}</div>`
+    : '';
+
   const matchupHtml = t.length === 2 ? `
     <div class="bet-matchup-header">
       <span class="scouting-team">${t[0].teamName}</span>
       <span class="scouting-at">vs</span>
       <span class="scouting-team">${t[1].teamName}</span>
       ${data.kalshiTotal ? `<span class="scouting-cache-badge">${data.kalshiTotal} Kalshi markets</span>` : ''}
-    </div>` : '';
+    </div>
+    ${rosterNoteHtml}` : '';
 
   const playersHtml = data.players
-    .map(player => renderBetPlayerCard(player, data.teams))
+    .map(player => renderBetPlayerCard(player, data.teams, bettingState.cardCollapsed.has(String(player.athleteId))))
     .join('');
+
+  const collapseControlsHtml = `
+    <div class="bet-collapse-controls">
+      <button class="bet-collapse-btn" data-bet-action="collapse-all">Collapse All</button>
+      <button class="bet-collapse-btn" data-bet-action="expand-all">Expand All</button>
+    </div>`;
 
   dom.bettingContent.innerHTML = `
     <div class="card card-animate">
       ${matchupHtml}
+      ${collapseControlsHtml}
       <div class="bet-players-grid">${playersHtml}</div>
       <div id="bet-parlay-section">${renderParlayHtml()}</div>
     </div>`;
@@ -1475,33 +1866,82 @@ const BET_STAT_LABELS = {
 
 const BET_RATING_LABELS = { green: 'Good', blue: 'Lean Over', yellow: 'Caution', red: 'Fade' };
 
-function renderBetPlayerCard(player, teams) {
-  const opponentTeam = (teams || []).find(t => String(t.teamId) !== String(player.teamId));
-  const opponentAbbr = opponentTeam ? opponentTeam.abbreviation : 'OPP';
+function renderSeriesIndicator(seriesGames) {
+  if (!seriesGames) return '';
+  const dots = Math.min(seriesGames, 7);
+  const filled = Array.from({ length: dots }, () => '<span class="bet-series-dot bet-series-dot-filled"></span>').join('');
+  return `<span class="bet-series-indicator" title="Series: ${seriesGames} game${seriesGames !== 1 ? 's' : ''} vs this opponent">${filled}<span class="bet-series-label">${seriesGames}G series</span></span>`;
+}
 
-  const summaryPills = Object.entries(player.summary)
-    .filter(([, count]) => count > 0)
-    .map(([rating, count]) =>
-      `<span class="bet-summary-pill bet-pill-${rating}">${count} ${BET_RATING_LABELS[rating]}</span>`
-    ).join('');
-
-  const statsHtml = Object.keys(BET_STAT_LABELS)
-    .map(stat => renderBetStatRow(stat, player.stats[stat], opponentAbbr, player.athleteId))
-    .join('');
-
-  const headshotSrc = player.headshot || '';
+function renderTierBreakdown(tiers, weightedScore, rating) {
+  if (!tiers) return '';
+  const rows = ['t1', 't2', 't3', 't4'].map(k => {
+    const t = tiers[k];
+    if (!t) return '';
+    const ratePct = t.rate != null ? Math.round(t.rate * 100) + '%' : '—';
+    const dim = t.games === 0 || t.weight === 0;
+    return `
+      <div class="bet-tier-row${dim ? ' bet-tier-dim' : ''}">
+        <span class="bet-tier-label">${t.label}</span>
+        <span class="bet-tier-games">${t.games}g</span>
+        <span class="bet-tier-rate">${ratePct}</span>
+        <span class="bet-tier-weight">${t.weight}%</span>
+      </div>`;
+  }).join('');
 
   return `
-    <div class="bet-player-card" data-aid="${player.athleteId}">
-      <div class="bet-player-header">
+    <div class="bet-tier-breakdown">
+      <div class="bet-tier-header">
+        <span class="bet-tier-label">Tier</span>
+        <span class="bet-tier-games">Games</span>
+        <span class="bet-tier-rate">Rate</span>
+        <span class="bet-tier-weight">Weight</span>
+      </div>
+      ${rows}
+      <div class="bet-tier-total">
+        <span class="bet-tier-total-label">Weighted Score</span>
+        <span class="bet-tier-score bet-rating-${rating}">${weightedScore}%</span>
+      </div>
+    </div>`;
+}
+
+function renderBetPlayerCard(player, teams, collapsed = false) {
+  const opponentTeam = (teams || []).find(t => String(t.teamId) !== String(player.teamId));
+  const opponentAbbr = opponentTeam ? opponentTeam.abbreviation : 'OPP';
+  const isLoading    = player.stats === null || player.stats === undefined;
+
+  const summaryContent = isLoading
+    ? '<span class="bet-loading-text">Loading&hellip;</span>'
+    : (() => {
+        const pills = Object.entries(player.summary || {})
+          .filter(([, count]) => count > 0)
+          .map(([rating, count]) =>
+            `<span class="bet-summary-pill bet-pill-${rating}">${count} ${BET_RATING_LABELS[rating]}</span>`
+          ).join('');
+        return pills || '<span class="bet-no-markets-badge">No lines</span>';
+      })();
+
+  const marketsContent = isLoading
+    ? `<div class="bet-markets-loading"><span class="bet-loading-text">Loading stats&hellip;</span></div>`
+    : Object.keys(BET_STAT_LABELS)
+        .map(stat => renderBetStatRow(stat, player.stats[stat], opponentAbbr, player.athleteId))
+        .join('');
+
+  const headshotSrc = player.headshot || '';
+  const seriesHtml  = renderSeriesIndicator(player.seriesGames);
+
+  return `
+    <div class="bet-player-card" data-aid="${player.athleteId}" data-collapsed="${collapsed}">
+      <div class="bet-player-header bet-player-header-clickable">
         ${headshotSrc ? `<img class="bet-player-avatar" src="${headshotSrc}" alt="${player.playerName}" onerror="this.style.display='none'" />` : ''}
         <div class="bet-player-identity">
-          <div class="bet-player-name">${player.playerName}</div>
+          <div class="bet-player-name">${player.playerName}${seriesHtml}</div>
           <div class="bet-player-team">${player.teamName}${player.position ? ` &middot; ${player.position}` : ''}</div>
         </div>
-        <div class="bet-summary">${summaryPills || '<span class="bet-no-markets-badge">No lines</span>'}</div>
+        <div class="bet-summary">${summaryContent}</div>
+        <span class="bet-card-chevron" aria-hidden="true">&#x203A;</span>
       </div>
-      <div class="bet-markets-list">${statsHtml}</div>
+      <div class="bet-markets-list">${marketsContent}</div>
     </div>`;
 }
 
@@ -1555,6 +1995,8 @@ function renderBetStatRow(stat, analysis, opponentAbbr, athleteId) {
     ? `<div class="bet-parlay-note-row"><span class="bet-parlay-exclude-note">Custom line — no Kalshi market for parlay</span></div>`
     : '';
 
+  const tierBreakdownHtml = renderTierBreakdown(analysis.tiers, analysis.weightedScore ?? analysis.overRate, analysis.rating);
+
   return `
     <div class="bet-market-item" data-aid="${athleteId}" data-stat="${stat}">
       <div class="bet-market-header">
@@ -1562,12 +2004,12 @@ function renderBetStatRow(stat, analysis, opponentAbbr, athleteId) {
         <span class="bet-line-pill bet-line-editable" data-aid="${athleteId}" data-stat="${stat}" title="Click to edit line">O ${currentLine}</span>
         ${badgeHtml}
         <span class="bet-rating-badge bet-rating-${analysis.rating}">${analysis.rating.toUpperCase()}</span>
-        <span class="bet-over-pct">${analysis.overRate}% over last ${analysis.gamesAnalyzed}</span>
         ${oiNote}
         ${resetHtml}
       </div>
       ${quickBtnsHtml}
       ${parlayNoteHtml}
+      ${tierBreakdownHtml}
       <div class="bet-context-row">
         ${renderContextChip('Season Avg', analysis.seasonAvg)}
         ${renderContextChip('Last 5', analysis.last5Avg)}
@@ -1592,6 +2034,19 @@ function renderContextChip(label, value, gamesCount) {
       <span class="bet-context-label">${label}</span>
       <span class="bet-context-value">${display}${note}</span>
     </div>`;
+}
+
+function renderOtherMarketsSection(others) {
+  if (!others || !others.length) return '';
+  const rows = others.map(m => {
+    const price = m.yesPrice != null ? `<span class="bet-kalshi-price">${m.yesPrice}&cent; yes</span>` : '';
+    return `<div class="bet-other-market-row">
+      <span class="bet-other-market-desc">${m.statDesc || m.ticker}</span>
+      <span class="bet-other-market-line">O ${m.line}</span>
+      ${price}
+    </div>`;
+  }).join('');
+  return `<div class="bet-other-markets"><div class="bet-other-markets-title">Other Markets</div>${rows}</div>`;
 }
 
 function handleTabClick(event) {
@@ -1650,6 +2105,79 @@ async function init() {
     dom.bettingError.classList.add('hidden');
   });
   dom.bettingContent.addEventListener('click', e => {
+    // Global "Retry Failed Stats" button
+    if (e.target.closest('#bet-retry-btn')) {
+      retryFailedPlayers();
+      return;
+    }
+    // "Retry Missing Markets" button
+    if (e.target.closest('#bet-missing-btn')) {
+      retryMissingMarkets();
+      return;
+    }
+
+    // Per-player rate-limit inline retry
+    const rateRetryBtn = e.target.closest('.bet-rate-retry-btn');
+    if (rateRetryBtn) {
+      const aid    = rateRetryBtn.dataset.aid;
+      const player = bettingState.players.find(p => String(p.athleteId) === String(aid));
+      const gameId = dom.bettingGameSelect.value;
+      if (player && gameId) {
+        bettingState.failedPlayers.delete(aid);
+        rateRetryBtn.textContent = 'Retrying…';
+        rateRetryBtn.disabled = true;
+        fetchJson(`${apiBase}/games/${gameId}/betting/player/${aid}`)
+          .then(statsData => {
+            if (statsData.rateLimited) {
+              bettingState.failedPlayers.add(aid);
+              markPlayerRateLimited(player);
+            } else {
+              Object.assign(player, { stats: statsData.stats, summary: statsData.summary, seriesGames: statsData.seriesGames || 0 });
+              updatePlayerCardStats(player, 'live');
+              updateParlaySection();
+            }
+            updateRetryButton();
+          })
+          .catch(() => {
+            bettingState.failedPlayers.add(aid);
+            markPlayerRateLimited(player);
+            updateRetryButton();
+          });
+      }
+      return;
+    }
+
+    // Collapse All / Expand All buttons
+    const betAction = e.target.closest('[data-bet-action]');
+    if (betAction) {
+      const action = betAction.dataset.betAction;
+      const allCards = dom.bettingContent.querySelectorAll('.bet-player-card');
+      if (action === 'collapse-all') {
+        bettingState.cardCollapsed = new Set([...allCards].map(c => c.dataset.aid));
+        allCards.forEach(c => { c.dataset.collapsed = 'true'; });
+      } else if (action === 'expand-all') {
+        bettingState.cardCollapsed = new Set();
+        allCards.forEach(c => { c.dataset.collapsed = 'false'; });
+      }
+      return;
+    }
+
+    // Player header click — toggle card collapse
+    const playerHeader = e.target.closest('.bet-player-header-clickable');
+    if (playerHeader) {
+      const card = playerHeader.closest('.bet-player-card');
+      if (!card) return;
+      const aid = card.dataset.aid;
+      const nowCollapsed = card.dataset.collapsed !== 'true';
+      card.dataset.collapsed = nowCollapsed ? 'true' : 'false';
+      if (nowCollapsed) {
+        bettingState.cardCollapsed.add(aid);
+      } else {
+        bettingState.cardCollapsed.delete(aid);
+      }
+      return;
+    }
+
     const sortTh = e.target.closest('[data-parlay-sort]');
     if (sortTh) {
       const col = sortTh.dataset.parlaySort;

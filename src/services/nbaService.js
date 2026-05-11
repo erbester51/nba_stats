@@ -19,6 +19,7 @@ class NBAService {
     this.teamsCache = null;
     this.teamRosterCache = {};
     this.playerGameTotalsCache = {};
+    this.gameLogsCache = {};          // key: `${id}_${season}` → { data, ts }
     this.lastMeetingCache = {};
     this.leagueStatsCache = null;
     this.leaguePlayoffStatsCache = null;
@@ -814,33 +815,36 @@ class NBAService {
   }
 
   async fetchPlayerGameLogsByType(id, season, seasonType, headers) {
-    try {
-      const response = await this.client.get(`${NBA_STATS_API}/playergamelog`, {
-        params: {
-          PlayerID: id,
-          Season: season,
-          SeasonType: seasonType
-        },
-        headers
-      });
-
-      const data = response.data;
-      const resultSet = data?.resultSets?.[0] || {};
-      const gameHeaders = resultSet.headers || [];
-      const gameRows = resultSet.rowSet || [];
-
-      return gameRows.map(row => {
-        const rowObj = {};
-        gameHeaders.forEach((header, index) => {
-          rowObj[header] = row[index];
+    const MAX_RETRIES = 3;
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        const response = await this.client.get(`${NBA_STATS_API}/playergamelog`, {
+          params: { PlayerID: id, Season: season, SeasonType: seasonType },
+          headers
         });
-        rowObj.SEASON_TYPE = seasonType;
-        return rowObj;
-      });
-    } catch (error) {
-      console.warn(`Error fetching ${seasonType} game logs:`, error.message);
-      return [];
+        const data = response.data;
+        const resultSet = data?.resultSets?.[0] || {};
+        const gameHeaders = resultSet.headers || [];
+        const gameRows = resultSet.rowSet || [];
+        return gameRows.map(row => {
+          const rowObj = {};
+          gameHeaders.forEach((header, index) => { rowObj[header] = row[index]; });
+          rowObj.SEASON_TYPE = seasonType;
+          return rowObj;
+        });
+      } catch (error) {
+        const is429 = error.response?.status === 429;
+        if (is429 && attempt < MAX_RETRIES) {
+          console.warn(`[NBA] 429 for player ${id} ${seasonType}, retry ${attempt}/${MAX_RETRIES} in 3s`);
+          await new Promise(r => setTimeout(r, 3000));
+          continue;
+        }
+        console.warn(`Error fetching ${seasonType} game logs (attempt ${attempt}):`, error.message);
+        if (is429) throw Object.assign(new Error('Rate limited after retries'), { rateLimited: true });
+        return [];
+      }
     }
+    return [];
   }
 
   async getPlayerGameLogs(playerId, season = '2025-26') {
@@ -848,6 +852,13 @@ class NBAService {
       const id = /^[0-9]+$/.test(playerId) ? playerId : await this.getPlayerIdByName(playerId);
       if (!id) {
         return { playerId, games: [], error: 'Player not found' };
+      }
+
+      const cacheKey = `${id}_${season}`;
+      const THIRTY_MIN = 30 * 60 * 1000;
+      const cached = this.gameLogsCache[cacheKey];
+      if (cached && Date.now() - cached.ts < THIRTY_MIN) {
+        return cached.data;
       }
 
       const headers = {
@@ -868,7 +879,9 @@ class NBAService {
 
       const games = [...regularGames, ...playoffGames];
 
-      return { playerId: id, games, season };
+      const result = { playerId: id, games, season };
+      this.gameLogsCache[cacheKey] = { data: result, ts: Date.now() };
+      return result;
     } catch (error) {
       console.warn('Error fetching game logs:', error.message);
       return { playerId, games: [], error: error.message };
